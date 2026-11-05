@@ -226,10 +226,6 @@ main {
   background: #fff0d0;
   color: #856016;
 }
-.save-state.exportRequested {
-  background: #e3ebf5;
-  color: #3c638b;
-}
 .panel {
   background: #fff;
   border: 1px solid #dce4ec;

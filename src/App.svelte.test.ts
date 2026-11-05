@@ -3,12 +3,20 @@ import { render } from 'vitest-browser-svelte'
 import App from './App.svelte'
 import EntityScreen from './components/EntityScreen.svelte'
 import { createWorkspace } from './lib/store.svelte'
-import { fakeFilePickers, fixture, id, NOW } from './lib/test-fixture'
+import { fakeTylanFolder, fixture, id, NOW } from './lib/test-fixture'
+
+type Screen = Awaited<ReturnType<typeof render>>
+const jsonName = `network-${new Date().getFullYear()}.json`
+async function createJson(screen: Screen) {
+  await screen.getByRole('button', { name: 'tylan フォルダを選ぶ' }).click()
+  await screen.getByRole('button', { name: '作成して編集を始める' }).click()
+  await expect.element(screen.getByRole('button', { name: '拠点を追加' })).toBeVisible()
+}
 
 test('新しいJSONを作って拠点・機器を登録し、キャンセル・Undoが動作する', async () => {
-  fakeFilePickers()
+  fakeTylanFolder()
   const screen = await render(App)
-  await screen.getByRole('button', { name: /新しいJSONを作る/ }).click()
+  await createJson(screen)
   await screen.getByRole('button', { name: '拠点を追加' }).click()
   await screen.getByRole('textbox', { name: '名称', exact: true }).fill('本社')
   await screen.getByRole('button', { name: '確定', exact: true }).click()
@@ -47,7 +55,7 @@ test('runesの単一正本、10世代Undo、不正読込の保護、出力状態
   expect(ws.doc.devices[0]!.name).toBe('更新10')
   const out = ws.exportJson(NOW, '担当者')
   expect(out.doc.project.revision).toBe(1)
-  expect(ws.saveState).toBe('exportRequested')
+  expect(ws.saveState).toBe('clean')
   expect(ws.doc.project.revision).toBe(1)
   expect(
     ws.commit((d) => {
@@ -61,9 +69,9 @@ test('runesの単一正本、10世代Undo、不正読込の保護、出力状態
 
 test('入力中の画面移動を止め、続行を選ぶまで下書きを保持する', async () => {
   window.location.hash = '#/project'
-  fakeFilePickers()
+  fakeTylanFolder()
   const screen = await render(App)
-  await screen.getByRole('button', { name: /新しいJSONを作る/ }).click()
+  await createJson(screen)
   await screen.getByRole('button', { name: '拠点を追加' }).click()
   await screen.getByRole('textbox', { name: '名称', exact: true }).fill('入力途中の拠点')
   await screen.getByRole('link', { name: '機器・資産台帳', exact: true }).click()
@@ -101,31 +109,30 @@ test('回次作成画面から20項目を生成し、監査必須欄エラーで
   expect(workspace.doc.auditResults[0]!.judgment).toBe('unchecked')
 })
 
-test('確定した変更はJSONへ自動保存され、開き直すと復元。他所の変更は上書きしない', async () => {
+test('JSONを握るまで編集不可。変更はworkingへ自動保存され、開き直し・前回分の引き継ぎができ、他所の変更は上書きしない', async () => {
   window.location.hash = '#/project'
-  const fake = fakeFilePickers()
+  const fake = fakeTylanFolder()
+  const path = `working/${jsonName}`
   const first = await render(App)
-  // No editing before a file exists.
   await expect.element(first.getByRole('button', { name: '拠点を追加' })).not.toBeInTheDocument()
-  await first.getByRole('button', { name: /新しいJSONを作る/ }).click()
-  const name = `network-${new Date().getFullYear()}.json`
-  await expect.poll(() => fake.files.get(name)?.text ?? '').toContain('"format": "tylan"')
+  await createJson(first)
+  await expect.poll(() => fake.files.get(path)?.text).toContain('"format": "tylan"')
   await first.getByRole('button', { name: '拠点を追加' }).click()
   await first.getByRole('textbox', { name: '名称', exact: true }).fill('本社')
   await first.getByRole('button', { name: '確定', exact: true }).click()
-  await expect.poll(() => fake.files.get(name)!.text, { timeout: 3000 }).toContain('本社')
+  await expect.poll(() => fake.files.get(path)!.text, { timeout: 3000 }).toContain('本社')
   await expect.element(first.getByText(/^保存済み/)).toBeVisible()
   await first.unmount()
 
-  // Reload: the data lives in the file, not in the page.
-  fake.toOpen = name
+  // Browser closed and reopened: the data lives in the file, not in the page.
   const second = await render(App)
-  await second.getByRole('button', { name: /既存のJSONを開く/ }).click()
+  await second.getByRole('button', { name: 'tylan フォルダを選ぶ' }).click()
+  await second.getByRole('button', { name: `${jsonName} を開く` }).click()
   await expect.element(second.getByRole('button', { name: '本社', exact: true })).toBeVisible()
 
   // Someone else changes the file: autosave must stop instead of overwriting.
-  fake.files.get(name)!.lastModified += 100
-  const outside = fake.files.get(name)!.text
+  fake.files.get(path)!.lastModified += 100
+  const outside = fake.files.get(path)!.text
   await second.getByRole('button', { name: '本社', exact: true }).click()
   await second.getByRole('button', { name: '編集', exact: true }).click()
   await second.getByRole('textbox', { name: '名称', exact: true }).fill('本社ビル')
@@ -133,7 +140,16 @@ test('確定した変更はJSONへ自動保存され、開き直すと復元。�
   await expect
     .element(second.getByText(/ファイルが別の場所で変更されています/), { timeout: 3000 })
     .toBeVisible()
-  expect(fake.files.get(name)!.text).toBe(outside)
+  expect(fake.files.get(path)!.text).toBe(outside)
   await second.getByRole('button', { name: 'この画面の内容で上書きする' }).click()
-  await expect.poll(() => fake.files.get(name)!.text).toContain('本社ビル')
+  await expect.poll(() => fake.files.get(path)!.text).toContain('本社ビル')
+
+  // Next audit: a new file that carries over last year's data; the source stays untouched.
+  await second.getByRole('button', { name: 'ファイルを閉じる' }).click()
+  const before = fake.files.get(path)!.text
+  await second.getByRole('textbox', { name: 'ファイル名' }).fill('network-next.json')
+  await second.getByRole('button', { name: '作成して編集を始める' }).click()
+  await expect.element(second.getByText('network-next.json', { exact: true })).toBeVisible()
+  await expect.poll(() => fake.files.get('working/network-next.json')!.text).toContain('本社ビル')
+  expect(fake.files.get(path)!.text).toBe(before)
 })

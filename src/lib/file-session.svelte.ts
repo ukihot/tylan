@@ -1,16 +1,22 @@
-// Imperative shell: the open JSON file. Every accepted change is written back to it (autosave).
-import { parseDocument } from './io'
-import { isCancel, nowJst, pickJsonToCreate, pickJsonToOpen, writeHandle } from './platform'
+// Imperative shell: the tylan folder on the share and the JSON being edited in working\.
+// Every accepted change is written back to that JSON (autosave).
+import { exportFilename, parseDocument } from './io'
+import { isCancel, isNotFound, listFiles, nowJst, pickFolder, writeHandle } from './platform'
+import { readPublicData } from './publish'
 import { MAX_BYTES } from './schema'
 import type { Workspace } from './store.svelte'
 
 export type FileStatus = 'saved' | 'saving' | 'error' | 'conflict'
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
 export function createFileSession(workspace: Workspace, delay = 800) {
+  let root = $state.raw<FileSystemDirectoryHandle | null>(null)
+  let working: FileSystemDirectoryHandle | null = null
+  let jsonFiles = $state<string[]>([])
   let handle = $state.raw<FileSystemFileHandle | null>(null)
   let status = $state<FileStatus>('saved')
   let message = $state('')
   let savedAt = $state('')
-  let copySource = $state.raw<{ name: string; text: string; size: number } | null>(null)
   let lastModified = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   let busy = false
@@ -38,7 +44,7 @@ export function createFileSession(workspace: Workspace, delay = 800) {
         return
       }
       const now = nowJst()
-      const out = workspace.exportJson(now, workspace.doc.project.updatedBy, true)
+      const out = workspace.exportJson(now, workspace.doc.project.updatedBy)
       await writeHandle(handle, out.text)
       lastModified = (await handle.getFile()).lastModified
       savedAt = now.slice(11, 19)
@@ -47,7 +53,7 @@ export function createFileSession(workspace: Workspace, delay = 800) {
     } catch (e) {
       workspace.markDirty()
       status = 'error'
-      message = `保存できませんでした（${e instanceof Error ? e.message : String(e)}）。共有フォルダへの接続とアクセス権を確認してから「今すぐ保存」を押してください。`
+      message = `保存できませんでした（${errorText(e)}）。共有フォルダへの接続とアクセス権を確認してから「今すぐ保存」を押してください。`
     } finally {
       busy = false
       if (again) {
@@ -63,33 +69,61 @@ export function createFileSession(workspace: Workspace, delay = 800) {
     }
   })
 
-  async function adopt(next: FileSystemFileHandle) {
-    handle = next
-    lastModified = (await next.getFile()).lastModified
-    status = 'saved'
+  /** Runs a user action; a cancelled picker is not an error. */
+  async function run(action: () => Promise<boolean>) {
     message = ''
-    savedAt = ''
-  }
-  /** Runs a picker flow; a cancelled picker is not an error. Returns true when a file is now open. */
-  async function run(flow: () => Promise<boolean>) {
     try {
-      return await flow()
+      return await action()
     } catch (e) {
       if (!isCancel(e)) {
-        message = e instanceof Error ? e.message : String(e)
+        message = errorText(e)
       }
       return false
     }
   }
-  async function readText(next: FileSystemFileHandle) {
-    const file = await next.getFile()
+  async function refresh() {
+    jsonFiles = working
+      ? (await listFiles(working))
+          .filter((n) => n.toLowerCase().endsWith('.json'))
+          .sort()
+          .reverse()
+      : []
+  }
+  async function readJson(name: string) {
+    const file = await (await working!.getFileHandle(name)).getFile()
     if (file.size > MAX_BYTES) {
-      throw new Error('10MiBを超えています。小さい正本JSONを選択してください')
+      throw new Error(`${name} は10MiBを超えています`)
     }
     return { text: await file.text(), size: file.size }
   }
+  async function adopt(next: FileSystemFileHandle) {
+    handle = next
+    lastModified = (await next.getFile()).lastModified
+    status = 'saved'
+    savedAt = ''
+  }
+  async function exists(dir: FileSystemDirectoryHandle, name: string) {
+    try {
+      await dir.getFileHandle(name)
+      return true
+    } catch (e) {
+      if (isNotFound(e)) {
+        return false
+      }
+      throw e
+    }
+  }
 
   return {
+    get folderName() {
+      return root?.name ?? ''
+    },
+    get hasFolder() {
+      return root !== null
+    },
+    get jsonFiles() {
+      return jsonFiles
+    },
     get fileName() {
       return handle?.name ?? ''
     },
@@ -118,52 +152,62 @@ export function createFileSession(workspace: Workspace, delay = 800) {
       return savedAt ? `保存済み ${savedAt}` : '保存済み'
     },
     flush,
-    createBlank: () =>
+    chooseFolder: () =>
       run(async () => {
-        const next = await pickJsonToCreate(`network-${nowJst().slice(0, 4)}.json`)
-        workspace.reset()
-        await adopt(next)
-        await flush()
+        const dir = await pickFolder()
+        // Guards against picking Downloads, Documents, or tools itself by mistake.
+        try {
+          await dir.getDirectoryHandle('tools')
+        } catch (e) {
+          if (isNotFound(e)) {
+            throw new Error(
+              `「${dir.name}」は tylan フォルダではありません。tools フォルダ（editor.html の置き場所）が入っているフォルダを選んでください。`,
+            )
+          }
+          throw e
+        }
+        working = await dir.getDirectoryHandle('working', { create: true })
+        root = dir
+        await refresh()
         return true
       }),
-    get copySource() {
-      return copySource?.name ?? ''
-    },
-    // Two clicks on purpose: each file picker needs its own user gesture.
-    pickCopySource: () =>
+    open: (name: string) =>
       run(async () => {
-        const source = await pickJsonToOpen()
-        const { text, size } = await readText(source)
-        parseDocument(text, size) // reject a broken source before asking where to save
-        copySource = { name: source.name, text, size }
-        message = ''
-        return false
-      }),
-    createFromCopy: () =>
-      run(async () => {
-        if (!copySource) {
-          return false
-        }
-        const next = await pickJsonToCreate(`network-${nowJst().slice(0, 4)}.json`)
-        if (!workspace.load(copySource.text, copySource.size)) {
-          return false
-        }
-        copySource = null
-        await adopt(next)
-        await flush()
-        return true
-      }),
-    cancelCopy() {
-      copySource = null
-    },
-    open: () =>
-      run(async () => {
-        const next = await pickJsonToOpen()
-        const { text, size } = await readText(next)
+        const next = await working!.getFileHandle(name)
+        const { text, size } = await readJson(name)
         if (!workspace.load(text, size)) {
           return false
         }
         await adopt(next)
+        return true
+      }),
+    /** Creates working\<name>; `from` copies an existing JSON (devices, links, past audits). */
+    create: (name: string, from: string | null) =>
+      run(async () => {
+        const fileName = name.trim().toLowerCase().endsWith('.json')
+          ? name.trim()
+          : `${name.trim()}.json`
+        if (!/^[^\\/:*?"<>|]+\.json$/.test(fileName) || fileName === '.json') {
+          throw new Error('ファイル名に使えない文字が含まれています')
+        }
+        if (await exists(working!, fileName)) {
+          throw new Error(
+            `${fileName} はすでにあります。別の名前にするか、一覧から開いてください。`,
+          )
+        }
+        const source = from ? await readJson(from) : null
+        if (source) {
+          parseDocument(source.text, source.size) // reject a broken source before creating anything
+        }
+        const next = await working!.getFileHandle(fileName, { create: true })
+        if (source) {
+          workspace.load(source.text, source.size)
+        } else {
+          workspace.reset()
+        }
+        await adopt(next)
+        await flush()
+        await refresh()
         return true
       }),
     reloadFromFile: () =>
@@ -171,14 +215,35 @@ export function createFileSession(workspace: Workspace, delay = 800) {
         if (!handle) {
           return false
         }
-        const { text, size } = await readText(handle)
+        const { text, size } = await readJson(handle.name)
         if (!workspace.load(text, size)) {
           return false
         }
         await adopt(handle)
+        message = ''
         return true
       }),
     overwrite: () => flush(true),
+    /** Writes published\viewer.html (fixed name for viewers) and moves the previous one to archive\. */
+    publishViewer: (html: string) =>
+      run(async () => {
+        const published = await root!.getDirectoryHandle('published', { create: true })
+        if (await exists(published, 'viewer.html')) {
+          const old = await (await published.getFileHandle('viewer.html')).getFile()
+          const text = await old.text()
+          let revision = 0
+          try {
+            revision = readPublicData(text).project.revision
+          } catch {
+            /* not a tylan viewer: still archived, as r0000 */
+          }
+          const archive = await root!.getDirectoryHandle('archive', { create: true })
+          const name = exportFilename('viewer', revision, nowJst(), 'html')
+          await writeHandle(await archive.getFileHandle(name, { create: true }), text)
+        }
+        await writeHandle(await published.getFileHandle('viewer.html', { create: true }), html)
+        return true
+      }),
     /** Saves pending changes first; keeps the file open if that fails so nothing is lost. */
     async close() {
       if (workspace.saveState === 'dirty') {
@@ -189,6 +254,7 @@ export function createFileSession(workspace: Workspace, delay = 800) {
       }
       handle = null
       savedAt = ''
+      await refresh()
       return true
     },
   }

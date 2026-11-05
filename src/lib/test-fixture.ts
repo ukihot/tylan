@@ -1,16 +1,22 @@
 import { emptyDoc, newEntity } from './schema'
 export const NOW = '2026-11-05T14:30:00+09:00'
 export const id = (prefix: string, n: number) => `${prefix}_${String(n).padStart(16, '0')}`
-/** In-memory stand-in for the browser file pickers (tests cannot click native dialogs). */
-export function fakeFilePickers(target: object = window) {
+/**
+ * In-memory stand-in for the shared tylan folder and the browser pickers
+ * (tests cannot click native dialogs). Keys of `files` are paths like `working/network-2026.json`.
+ * Self-contained so it can also be injected into a page with `.toString()`.
+ */
+export function fakeTylanFolder(target: object = window) {
   const files = new Map<string, { text: string; lastModified: number }>()
-  const state = { files, toOpen: '' }
-  const handle = (name: string) => ({
-    name,
+  const dirs = new Set(['', 'tools'])
+  const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name)
+  const missing = () => new DOMException('not found', 'NotFoundError')
+  const fileHandle = (path: string) => ({
     kind: 'file',
+    name: path.split('/').at(-1),
     async getFile() {
-      const f = files.get(name)!
-      return new File([f.text], name, { lastModified: f.lastModified })
+      const f = files.get(path)!
+      return new File([f.text], path.split('/').at(-1)!, { lastModified: f.lastModified })
     },
     async createWritable() {
       const parts: (string | Blob)[] = []
@@ -19,23 +25,58 @@ export function fakeFilePickers(target: object = window) {
           parts.push(chunk)
         },
         async close() {
-          const f = files.get(name)!
+          const f = files.get(path)!
           f.text = await new Blob(parts).text()
           f.lastModified++
         },
       }
     },
   })
-  Object.assign(target, {
-    async showSaveFilePicker(options: { suggestedName: string }) {
-      files.set(options.suggestedName, { text: '', lastModified: 1 })
-      return handle(options.suggestedName)
+  const dirHandle = (path: string): object => ({
+    kind: 'directory',
+    name: path.split('/').at(-1) || 'tylan',
+    async getDirectoryHandle(name: string, options?: { create?: boolean }) {
+      const p = join(path, name)
+      if (!dirs.has(p)) {
+        if (!options?.create) {
+          throw missing()
+        }
+        dirs.add(p)
+      }
+      return dirHandle(p)
     },
-    async showOpenFilePicker() {
-      return [handle(state.toOpen)]
+    async getFileHandle(name: string, options?: { create?: boolean }) {
+      const p = join(path, name)
+      if (!files.has(p)) {
+        if (!options?.create) {
+          throw missing()
+        }
+        files.set(p, { text: '', lastModified: 1 })
+      }
+      return fileHandle(p)
+    },
+    async *values() {
+      for (const key of files.keys()) {
+        if (
+          key.startsWith(path ? `${path}/` : '') &&
+          !key.slice(path ? path.length + 1 : 0).includes('/')
+        ) {
+          yield fileHandle(key)
+        }
+      }
     },
   })
-  return state
+  Object.assign(target, {
+    async showDirectoryPicker() {
+      return dirHandle('')
+    },
+    async showSaveFilePicker(options: { suggestedName: string }) {
+      const p = join('saved', options.suggestedName)
+      files.set(p, { text: '', lastModified: 1 })
+      return fileHandle(p)
+    },
+  })
+  return { files }
 }
 export function fixture() {
   const doc = emptyDoc(NOW, id('prj', 1))

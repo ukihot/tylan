@@ -7,7 +7,7 @@ import { type Browser, type BrowserContext, chromium, type Page } from 'playwrig
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { createViewer, toPublic } from '../src/lib/publish'
 import { sampleDoc } from '../src/lib/sample'
-import { fakeFilePickers, fixture, id, NOW } from '../src/lib/test-fixture'
+import { fakeTylanFolder, fixture, id, NOW } from '../src/lib/test-fixture'
 
 let browser: Browser
 const browserVersions: Record<string, string> = {}
@@ -34,17 +34,17 @@ async function offlineContext() {
   context.on('page', (p) => p.on('pageerror', (e) => errors.push(e.message)))
   return { context, requests, errors }
 }
-// Native file dialogs cannot be clicked in automation; replace them with in-memory files.
-type Fake = ReturnType<typeof fakeFilePickers>
+// Native folder dialogs cannot be clicked in automation; replace them with an in-memory tylan folder.
+type Fake = ReturnType<typeof fakeTylanFolder>
 async function openJsonFile(page: Page, json: string) {
-  await page.addInitScript(`window.__fake = (${fakeFilePickers.toString()})(window)`)
+  await page.addInitScript(`window.__fake = (${fakeTylanFolder.toString()})(window)`)
   await page.reload()
   await page.evaluate((text) => {
     const fake = (window as unknown as { __fake: Fake }).__fake
-    fake.files.set('network.json', { text, lastModified: 1 })
-    fake.toOpen = 'network.json'
+    fake.files.set('working/network.json', { text, lastModified: 1 })
   }, json)
-  await page.getByRole('button', { name: /既存のJSONを開く/ }).click()
+  await page.getByRole('button', { name: 'tylan フォルダを選ぶ' }).click()
+  await page.getByRole('button', { name: 'network.json を開く' }).click()
 }
 const savedFiles = (page: Page) =>
   page.evaluate(() =>
@@ -74,7 +74,7 @@ test('編集用HTMLがオフラインのfile://で起動し、読込・図・公
   try {
     const page = await context.newPage()
     await page.goto(pathToFileURL(resolve('dist/editor.html')).href)
-    await page.getByRole('heading', { name: '監査用のJSONファイルを用意します' }).waitFor()
+    await page.getByRole('heading', { name: 'tylan フォルダを選んでください' }).waitFor()
     await openJsonFile(page, JSON.stringify(fixture()))
     await page.getByRole('button', { name: '東京', exact: true }).waitFor()
     await page.getByRole('link', { name: 'トポロジー', exact: true }).click()
@@ -90,13 +90,15 @@ test('編集用HTMLがオフラインのfile://で起動し、読込・図・公
     await page.getByRole('checkbox', { name: '東京', exact: true }).check()
     // Ticking a site is a change: it is autosaved to the opened file as revision 1.
     await expect
-      .poll(async () => JSON.parse((await savedFiles(page))['network.json']!.text).project.revision)
+      .poll(
+        async () =>
+          JSON.parse((await savedFiles(page))['working/network.json']!.text).project.revision,
+      )
       .toBe(1)
     await page.getByRole('button', { name: '公開プレビューを確認' }).click()
-    await page.getByRole('button', { name: '閲覧用HTMLを保存' }).click()
-    await page.getByText(/閲覧用HTML（r0001）を保存しました/).waitFor()
-    const saved = Object.keys(await savedFiles(page))
-    expect(saved.some((n) => n.startsWith('viewer-r0001'))).toBe(true)
+    await page.getByRole('button', { name: /閲覧用HTMLを公開/ }).click()
+    await page.getByText(/閲覧用HTML（r0001）を published/).waitFor()
+    expect((await savedFiles(page))['published/viewer.html']!.text).toContain('tylan-data')
     expect(errors).toEqual([])
     expect(requests).toEqual([])
     await noExternalResources(context)
@@ -149,7 +151,7 @@ test.runIf(existsSync('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.
       const errors: string[] = []
       page.on('pageerror', (error) => errors.push(error.message))
       await page.goto(pathToFileURL(resolve('dist/editor.html')).href)
-      await page.getByRole('heading', { name: '監査用のJSONファイルを用意します' }).waitFor()
+      await page.getByRole('heading', { name: 'tylan フォルダを選んでください' }).waitFor()
       await openJsonFile(page, JSON.stringify(sampleDoc()))
       await page.getByRole('link', { name: 'トポロジー', exact: true }).click()
       await page.locator('.device-node').first().waitFor()

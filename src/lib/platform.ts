@@ -1,4 +1,4 @@
-// Imperative shell: entropy, time, file pickers, browser download, File API.
+// Imperative shell: entropy, time, folder/file access.
 export function createId(prefix: string) {
   const bytes = crypto.getRandomValues(new Uint8Array(16))
   const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
@@ -23,10 +23,10 @@ export function nowJst() {
 // File System Access API (Edge/Chrome, also on file://). Typed locally: not in every TS DOM lib.
 type PickerType = { description: string; accept: Record<string, string[]> }
 type Pickers = {
-  showOpenFilePicker(options: {
+  showDirectoryPicker(options: {
     id?: string
-    types?: PickerType[]
-  }): Promise<FileSystemFileHandle[]>
+    mode?: 'readwrite'
+  }): Promise<FileSystemDirectoryHandle>
   showSaveFilePicker(options: {
     id?: string
     suggestedName?: string
@@ -35,27 +35,29 @@ type Pickers = {
 }
 const pickers = () => window as unknown as Pickers
 export const canWriteFiles = () =>
-  typeof window !== 'undefined' && 'showSaveFilePicker' in window && 'showOpenFilePicker' in window
+  typeof window !== 'undefined' && 'showDirectoryPicker' in window && 'showSaveFilePicker' in window
 export const isCancel = (e: unknown) => e instanceof DOMException && e.name === 'AbortError'
-const jsonTypes = [{ description: 'tylan JSON', accept: { 'application/json': ['.json'] } }]
-export async function pickJsonToOpen() {
-  const [handle] = await pickers().showOpenFilePicker({ id: 'tylan-json', types: jsonTypes })
-  return handle!
+export const isNotFound = (e: unknown) => e instanceof DOMException && e.name === 'NotFoundError'
+export function pickFolder() {
+  return pickers().showDirectoryPicker({ id: 'tylan-root', mode: 'readwrite' })
 }
-export function pickJsonToCreate(suggestedName: string) {
-  return pickers().showSaveFilePicker({ id: 'tylan-json', suggestedName, types: jsonTypes })
+export async function listFiles(dir: FileSystemDirectoryHandle) {
+  const names: string[] = []
+  const entries = dir as unknown as { values(): AsyncIterable<FileSystemHandle> }
+  for await (const entry of entries.values()) {
+    if (entry.kind === 'file') {
+      names.push(entry.name)
+    }
+  }
+  return names
 }
 export async function writeHandle(handle: FileSystemFileHandle, content: string | Blob) {
   const writable = await handle.createWritable()
   await writable.write(content)
   await writable.close()
 }
-/** Ask where to save; falls back to a browser download. Returns null when the user cancels. */
+/** Ask where to save. Returns false when the user cancels. */
 export async function saveAs(content: string | Blob, filename: string, type: string) {
-  if (!canWriteFiles()) {
-    download(content, filename, type)
-    return 'downloaded' as const
-  }
   const ext = filename.slice(filename.lastIndexOf('.'))
   try {
     const handle = await pickers().showSaveFilePicker({
@@ -66,23 +68,11 @@ export async function saveAs(content: string | Blob, filename: string, type: str
       ],
     })
     await writeHandle(handle, content)
-    return 'saved' as const
+    return true
   } catch (e) {
     if (isCancel(e)) {
-      return null
+      return false
     }
     throw e
   }
-}
-export function download(
-  content: string | Blob,
-  filename: string,
-  type = 'application/json;charset=utf-8',
-) {
-  const url = URL.createObjectURL(content instanceof Blob ? content : new Blob([content], { type }))
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  anchor.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }

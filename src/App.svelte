@@ -5,21 +5,23 @@
   import Topology from './components/Topology.svelte'
   import { auditSummary } from './lib/audit-master'
   import { createFileSession } from './lib/file-session.svelte'
-  import { canWriteFiles } from './lib/platform'
+  import { canWriteFiles, nowJst } from './lib/platform'
   import { collectionLabels } from './lib/presentation'
   import { entityHref, screenCollections, screens } from './lib/routes'
-  import { type Collection, type Doc, MAX_BYTES, ProjectSchema } from './lib/schema'
+  import { type Collection, type Doc, ProjectSchema } from './lib/schema'
   import { createWorkspace } from './lib/store.svelte'
 
   const workspace = createWorkspace()
-  // Edge/Chrome: edit the JSON file directly. Other browsers fall back to load + download.
-  const files = canWriteFiles() ? createFileSession(workspace) : null
+  // Editing always happens inside a JSON file in the shared tylan\working folder: no file, no editing.
+  const supported = canWriteFiles()
+  const files = createFileSession(workspace)
   let notice = $state('')
+  let newName = $state(`network-${nowJst().slice(0, 4)}.json`)
+  let copyFrom = $state('')
   let hash = $state(window.location.hash)
   let tab = $state<Collection>('sites')
   let projectDraft = $state<Doc['project'] | null>(null)
   let pending = $state<(() => void) | null>(null)
-  let fileError = $state('')
   let entityEditing = $state(false)
   let session = $state(0)
   const editing = $derived(entityEditing || projectDraft !== null)
@@ -37,66 +39,29 @@
         : choices[0]) as Collection,
   )
   const doc = $derived(workspace.doc)
-  const saveLabels = {
-    clean: '書き出し済みの変更なし',
-    dirty: '未書き出しの変更あり',
-    exportRequested: '書き出しを要求済み（共有への反映は未確認）',
-  }
   const summary = $derived(
     auditSummary(doc.auditResults.filter((r) => r.roundId === doc.auditRounds.at(-1)?.id)),
   )
-  function destructive(action: () => void) {
-    if (workspace.saveState === 'dirty' || editing) {
-      pending = action
-    } else {
-      action()
-    }
-  }
-  async function readFile(file?: File) {
-    if (!file) {
-      return
-    }
-    fileError = ''
-    if (file.size > MAX_BYTES) {
-      fileError = '10MiBを超えています。小さい正本JSONを選択してください'
-      return
-    }
-    try {
-      const text = await file.text()
-      destructive(() => {
-        if (workspace.load(text, file.size)) {
-          window.location.hash = '#/project'
-          projectDraft = null
-          entityEditing = false
-          session++
-        }
-      })
-    } catch {
-      fileError = 'ファイルを読み取れません。共有の接続とアクセス権を確認して再選択してください。'
-    }
-  }
-  function freshStart(message: string) {
-    projectDraft = null
-    entityEditing = false
-    session++
-    notice = message
-    window.location.hash = '#/project'
-  }
-  function newProject() {
-    destructive(() => {
-      workspace.reset()
-      freshStart('新しい空のプロジェクトを作成しました。拠点の登録から始めてください。')
-    })
-  }
   async function fileAction(action: () => Promise<boolean>, done: () => string) {
     notice = ''
     if (await action()) {
-      freshStart(done())
+      projectDraft = null
+      entityEditing = false
+      session++
+      notice = done()
+      window.location.hash = '#/project'
+    }
+  }
+  async function chooseFolder() {
+    notice = ''
+    if (await files.chooseFolder()) {
+      copyFrom = files.jsonFiles[0] ?? ''
     }
   }
   async function closeFile() {
-    if (files && (await files.close())) {
-      notice = ''
+    notice = ''
+    if (await files.close()) {
+      copyFrom = files.jsonFiles[0] ?? ''
     }
   }
   function saveProject() {
@@ -113,13 +78,13 @@
     }
   }
   function keydown(event: KeyboardEvent) {
-    if (files?.isOpen && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    if (files.isOpen && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
       event.preventDefault()
       void files.flush()
     }
   }
   function beforeUnload(event: BeforeUnloadEvent) {
-    if (workspace.saveState === 'dirty' || editing || files?.status === 'saving') {
+    if (workspace.saveState === 'dirty' || editing || files.status === 'saving') {
       event.preventDefault()
       event.returnValue = ''
     }
@@ -161,7 +126,7 @@
     <div class="sidebar-foot">
       <span class="offline-dot"></span>
       オフラインで作業
-      <p>データはメモリー上に保持。<br>書き出してから終了してください。</p>
+      <p>変更は working のJSONへ<br>自動保存されます。</p>
       <small>v0.1.0 · FCIS / Svelte 5</small>
     </div>
   </aside>
@@ -178,7 +143,7 @@
         </span>
       </div>
       <div class="header-actions">
-        {#if files?.isOpen}
+        {#if files.isOpen}
           <span class="file-name" title="編集中のファイル">{files.fileName}</span>
           <span
             role="status"
@@ -187,10 +152,6 @@
             {editing ? `入力中（未確定） · ${files.label}` : files.label}
           </span>
           <button type="button" title="Ctrl+S" onclick={() => files.flush()}>今すぐ保存</button>
-        {:else if !files}
-          <span class={`save-state ${workspace.saveState}`}>
-            {editing ? '入力中（未確定）' : saveLabels[workspace.saveState]}
-          </span>
         {/if}
         <button
           type="button"
@@ -202,8 +163,8 @@
       </div>
     </header>
     {#if pending}
-      <div role="alertdialog" aria-label="未書き出し変更の確認" class="confirm-box">
-        <p>入力中または未書き出しの変更があります。現在の作業を破棄して続行しますか。</p>
+      <div role="alertdialog" aria-label="入力中の内容の確認" class="confirm-box">
+        <p>入力中（未確定）の内容があります。破棄して移動しますか。</p>
         <button
           type="button"
           class="danger"
@@ -218,10 +179,7 @@
         <button type="button" onclick={() => (pending = null)}>現在の作業を続ける</button>
       </div>
     {/if}
-    {#if fileError}
-      <p role="alert" class="error">{fileError}</p>
-    {/if}
-    {#if files?.message}
+    {#if files.message}
       <div role="alert" class="error">
         <p>{files.message}</p>
         {#if files.status === 'conflict'}
@@ -254,60 +212,85 @@
         </ul>
       </div>
     {/if}
-    {#if files && !files.isOpen}
+    {#if !supported}
       <section class="panel">
         <p class="eyebrow">START</p>
-        <h2>監査用のJSONファイルを用意します</h2>
-        <p class="muted">
-          tylanはJSONファイルを直接編集します。確定した変更は自動でファイルへ保存されます。保存先は共有フォルダの
-          working を選んでください。
+        <h2>この画面では編集を始められません</h2>
+        <p>
+          tylanは共有フォルダのJSONへ直接保存します。このブラウザーではその機能（File System Access
+          API）が使えないため、データが失われないよう編集を止めています。
         </p>
+        <ul>
+          <li>Microsoft Edge か Google Chrome で editor.html を開いてください。</li>
+          <li>
+            Edgeでもこの表示になる場合は、社内ポリシーで制限されている可能性があります。情報システム担当へ相談してください。
+          </li>
+        </ul>
+        <p class="hint">
+          診断：セキュアコンテキスト{window.isSecureContext ? 'はい' : 'いいえ'} / フォルダ選択
+          {'showDirectoryPicker' in window ? 'あり' : 'なし'}
+        </p>
+      </section>
+    {:else if !files.hasFolder}
+      <section class="panel">
+        <p class="eyebrow">STEP 1 / 2</p>
+        <h2>tylan フォルダを選んでください</h2>
+        <p class="muted">
+          editor.html が入っている tools フォルダの、ひとつ上のフォルダです。JSONはその中の working
+          フォルダへ自動で保存されます。初回はEdgeがフォルダの編集を許可するか確認します。
+        </p>
+        <button type="button" class="primary" onclick={chooseFolder}>tylan フォルダを選ぶ</button>
+      </section>
+    {:else if !files.isOpen}
+      <section class="panel">
+        <p class="eyebrow">STEP 2 / 2 ·{files.folderName}\working</p>
+        <h2>編集するJSONを選んでください</h2>
         <div class="start-actions">
-          <button
-            type="button"
-            class="start-card primary"
-            onclick={() =>
-              fileAction(
-                files.createBlank,
-                () => `${files.fileName} を作成しました。拠点の登録から始めてください。`,
-              )}
-          >
-            <strong>新しいJSONを作る</strong>
-            <span>空の状態から始めます。</span>
-          </button>
-          <button type="button" class="start-card" onclick={() => files.pickCopySource()}>
-            <strong>前回のJSONをもとに作る</strong>
-            <span>
-              機器・配線・過去の監査結果を引き継いだ別ファイルを作ります。元のファイルは変更しません。
-            </span>
-          </button>
-          <button
-            type="button"
-            class="start-card"
-            onclick={() => fileAction(files.open, () => `${files.fileName} を開きました。`)}
-          >
-            <strong>既存のJSONを開く</strong>
-            <span>作成済みのファイルの続きを編集します。</span>
-          </button>
-        </div>
-        {#if files.copySource}
-          <div class="notice">
-            <p>「{files.copySource}」をもとにします。新しいファイルの保存先を選んでください。</p>
-            <button
-              type="button"
-              class="primary"
-              onclick={() =>
-                fileAction(
-                  files.createFromCopy,
-                  () =>
-                    `${files.fileName} を作成しました。監査の画面で今回の回次を追加してください。`,
-                )}
-            >
-              保存先を選んで作成
-            </button>
-            <button type="button" onclick={() => files.cancelCopy()}>やめる</button>
+          <div class="start-card">
+            <strong>続きを編集する</strong>
+            {#each files.jsonFiles as name}
+              <button
+                type="button"
+                onclick={() =>
+                  fileAction(
+                    () => files.open(name),
+                    () => `${name} を開きました。`,
+                  )}
+              >
+                {name} を開く
+              </button>
+            {:else}
+              <span>working にJSONはまだありません。</span>
+            {/each}
           </div>
-        {/if}
+          <form
+            class="start-card"
+            onsubmit={(e) => {
+              e.preventDefault()
+              void fileAction(
+                () => files.create(newName, copyFrom || null),
+                () =>
+                  copyFrom
+                    ? `${files.fileName} を作成しました（${copyFrom} を引き継ぎ）。監査の画面で今回の回次を追加してください。`
+                    : `${files.fileName} を作成しました。拠点の登録から始めてください。`,
+              )
+            }}
+          >
+            <strong>今回の監査用JSONを作る</strong>
+            <label>ファイル名<input bind:value={newName} required maxlength="100"></label>
+            <label>
+              引き継ぐデータ<select bind:value={copyFrom}>
+                <option value="">なし（空の状態から）</option>
+                {#each files.jsonFiles as name}
+                  <option value={name}>{name}（機器・配線・過去の監査）</option>
+                {/each}
+              </select>
+            </label>
+            <button type="submit" class="primary">作成して編集を始める</button>
+            <span>引き継ぎ元のファイルは変更しません。</span>
+          </form>
+        </div>
+        <button type="button" class="quiet" onclick={chooseFolder}>フォルダを選び直す</button>
       </section>
     {:else}
       {#if screen === 'project'}
@@ -318,11 +301,7 @@
               <h2>調査から、構成図へ。</h2>
               <p class="muted">資産・配線・設定・監査をひとつの正本で管理します。</p>
             </div>
-            {#if files}
-              <button type="button" onclick={closeFile}>ファイルを閉じる</button>
-            {:else}
-              <button type="button" onclick={newProject}>新規プロジェクト</button>
-            {/if}
+            <button type="button" onclick={closeFile}>ファイルを閉じる</button>
           </div>
           <div class="stats">
             <div>
@@ -346,30 +325,6 @@
               <span>確認が必要な警告</span>
             </div>
           </div>
-          {#if !files}
-            <section
-              class="file-drop"
-              aria-label="JSONファイル読み込み"
-              ondragover={(e) => e.preventDefault()}
-              ondrop={(e) => {
-                e.preventDefault()
-                void readFile(e.dataTransfer?.files[0])
-              }}
-            >
-              <strong>正本JSONを読み込む</strong>
-              <p>ファイルをここへドロップ、または選択してください（10MiB以下）。</p>
-              <label class="file-label">
-                JSONファイル<input
-                  type="file"
-                  accept=".json,application/json"
-                  onchange={(e) => {
-                    void readFile(e.currentTarget.files?.[0])
-                    e.currentTarget.value = ''
-                  }}
-                >
-              </label>
-            </section>
-          {/if}
           {#if projectDraft}
             <form
               onsubmit={(e) => {
@@ -415,7 +370,7 @@
           <Topology {doc} {workspace} />
         {/if}
       {:else if screen === 'export'}
-        <ExportPanel {workspace} />
+        <ExportPanel {workspace} {files} />
       {:else if choices.length}
         <div class="subtabs" role="tablist" aria-label="データの種類">
           {#each choices as c}

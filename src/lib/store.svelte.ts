@@ -16,7 +16,7 @@ export function createWorkspace(initial = emptyDoc(nowJst(), createId('prj'))) {
     throw new Error('初期データが不正です')
   }
   let doc = $state.raw<Doc>(freeze(structuredClone(initial)))
-  let saveState = $state<'clean' | 'dirty' | 'exportRequested'>('clean')
+  let saveState = $state<'clean' | 'dirty'>('clean')
   let issues = $state<Issue[]>([])
   let undoStack = $state.raw<Doc[]>([])
   let exportedRevision = initial.project.revision
@@ -117,12 +117,12 @@ export function createWorkspace(initial = emptyDoc(nowJst(), createId('prj'))) {
       issues = []
       saveState = 'clean'
     },
-    /** `written`: the caller writes the file itself (direct save), so the result is not just a download request. */
-    exportJson(now: string, updatedBy: string | null, written = false) {
+    /** Bumps the revision and marks clean; the caller writes `text` to the open file. */
+    exportJson(now: string, updatedBy: string | null) {
       const out = prepareExport(doc, now, updatedBy)
       doc = freeze(out.doc)
       exportedRevision = out.doc.project.revision
-      saveState = written ? 'clean' : 'exportRequested'
+      saveState = 'clean'
       return out
     },
     markDirty() {
