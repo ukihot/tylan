@@ -14,7 +14,7 @@ export type Folder = {
 export class ConflictError extends Error {}
 
 const unreachable =
-  'tylanの起動プログラムに接続できません。黒い窓（tylan.cmd）を閉じていないか確認し、閉じていれば tools\\tylan.cmd から起動し直してください。'
+  'tylanの起動プログラムが終了しています（編集画面を開いたままPCがスリープした場合など）。tools\\tylan.cmd から起動し直してください。確定済みの変更はファイルに保存されています。'
 
 /** The launcher opens the editor at http://127.0.0.1:<port>/?t=<token>; anything else has no folder. */
 export function launcherFolder(): Folder | null {

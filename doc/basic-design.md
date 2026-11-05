@@ -179,16 +179,16 @@ EdgeのFile System Access APIは共有フォルダでのフォルダ選択を拒
 
 **起動用スクリプト（`tylan.ps1`、Windows PowerShell 5.1、ASCIIのみ）**
 
-| 項目     | 内容                                                                                                                                                                        |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 起動     | `tylan.cmd` が `powershell.exe -ExecutionPolicy Bypass -File tylan.ps1` を実行する。tylanフォルダは `tylan.ps1` の1つ上                                                     |
-| 待ち受け | `TcpListener(127.0.0.1, 空きポート)`。HTTPの解析は最小限で、1要求ずつ処理して接続を閉じる                                                                                   |
-| 合言葉   | 起動ごとに256ビットの乱数。`/?t=<合言葉>` でEdgeを開き、APIは `X-Tylan-Token` ヘッダーで照合する                                                                            |
-| 検査     | Hostが `127.0.0.1:<ポート>` でない要求（DNSリバインディング）、Originが異なる要求、合言葉のない要求を403で拒否する                                                          |
-| 対象     | `working`・`working/csv`・`published`・`archive` 内の `.json`・`.html`・`.csv` だけ。区切り文字・`..`・先頭のドットを含む名前は400                                          |
-| API      | `GET /api/info`、`GET /api/list?dir=`、`GET /api/file?path=`（応答ヘッダー `X-Last-Modified`）、`PUT /api/file?path=&expect=`、`POST /api/copy?from=&to=`、`POST /api/ping` |
-| 書き込み | 同じフォルダの一時ファイルへ書いてから `File.Replace`（失敗時はコピー）で置き換える。`expect` が直前の更新日時と違えば409、`new` で既存なら409、`any` は上書き              |
-| 終了     | 3分間要求がなければ終了する。編集画面は10秒ごと（裏に回ると最短1分ごと）に `ping` を送る                                                                                    |
+| 項目     | 内容                                                                                                                                                                                                                                                                 |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 起動     | `tylan.cmd` が `start` で `powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File tylan.ps1` を実行してすぐ閉じる（コンソールは一瞬だけ表示される）。起動失敗などの致命的なエラーは `trap` でメッセージボックスに出す。tylanフォルダは `tylan.ps1` の1つ上 |
+| 待ち受け | `TcpListener(127.0.0.1, 空きポート)`。HTTPの解析は最小限で、1要求ずつ処理して接続を閉じる                                                                                                                                                                            |
+| 合言葉   | 起動ごとに256ビットの乱数。`/?t=<合言葉>` でEdgeを開き、APIは `X-Tylan-Token` ヘッダーで照合する                                                                                                                                                                     |
+| 検査     | Hostが `127.0.0.1:<ポート>` でない要求（DNSリバインディング）、Originが異なる要求、合言葉のない要求を403で拒否する                                                                                                                                                   |
+| 対象     | `working`・`working/csv`・`published`・`archive` 内の `.json`・`.html`・`.csv` だけ。区切り文字・`..`・先頭のドットを含む名前は400                                                                                                                                   |
+| API      | `GET /api/info`、`GET /api/list?dir=`、`GET /api/file?path=`（応答ヘッダー `X-Last-Modified`）、`PUT /api/file?path=&expect=`、`POST /api/copy?from=&to=`、`POST /api/ping`                                                                                          |
+| 書き込み | 同じフォルダの一時ファイルへ書いてから `File.Replace`（失敗時はコピー）で置き換える。`expect` が直前の更新日時と違えば409、`new` で既存なら409、`any` は上書き                                                                                                       |
+| 終了     | 3分間要求がなければ終了する。編集画面は10秒ごと（裏に回ると最短1分ごと）に `ping` を送る                                                                                                                                                                             |
 
 **編集画面側（`folder.ts`、`file-session.svelte.ts`）**
 

@@ -11,6 +11,18 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 
+# tylan.cmd runs this hidden, so a fatal error must be shown in a dialog instead of a console.
+trap {
+  $text = "tylan could not start or stopped with an error.`n`n$($_.Exception.Message)"
+  if ($NoBrowser) {
+    [Console]::Error.WriteLine($text)
+  } else {
+    Add-Type -AssemblyName System.Windows.Forms
+    [void][System.Windows.Forms.MessageBox]::Show($text, 'tylan', 'OK', 'Error')
+  }
+  exit 1
+}
+
 if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
 $Root = (Resolve-Path -LiteralPath $Root).ProviderPath
 $editor = Join-Path $PSScriptRoot 'editor.html'
@@ -198,7 +210,7 @@ function Serve($client) {
 }
 
 [Console]::Out.WriteLine("tylan: editing $Root")
-[Console]::Out.WriteLine('tylan: keep this window open while editing. It stops a few minutes after the editor is closed.')
+[Console]::Out.WriteLine('tylan: stops by itself a few minutes after the editor is closed.')
 [Console]::Out.WriteLine("TYLAN_URL=$url")
 [Console]::Out.Flush()
 if (-not $NoBrowser) {

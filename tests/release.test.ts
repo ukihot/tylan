@@ -229,6 +229,8 @@ test.runIf(existsSync('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.
       const page = await context.newPage()
       await page.goto(url)
       await page.getByRole('button', { name: 'network.json を開く' }).click()
+      // Opening ends on the project screen; navigate only after it has finished.
+      await page.getByText('network.json を開きました。').waitFor()
       await page.getByRole('link', { name: 'トポロジー', exact: true }).click()
       await page.locator('.device-node').first().waitFor()
       expect(await page.locator('.device-node').count()).toBe(9)
