@@ -20,6 +20,7 @@ export function createWorkspace(initial = emptyDoc(nowJst(), createId('prj'))) {
   let issues = $state<Issue[]>([])
   let undoStack = $state.raw<Doc[]>([])
   let exportedRevision = initial.project.revision
+  let changed: () => void = () => {}
   const validation = $derived(validate(doc))
   function accept(result: ChangeResult) {
     issues = result.errors
@@ -32,6 +33,7 @@ export function createWorkspace(initial = emptyDoc(nowJst(), createId('prj'))) {
     undoStack = [...undoStack.slice(-9), doc]
     doc = freeze(result.doc)
     saveState = 'dirty'
+    changed()
     return true
   }
   return {
@@ -85,6 +87,7 @@ export function createWorkspace(initial = emptyDoc(nowJst(), createId('prj'))) {
       undoStack = undoStack.slice(0, -1)
       saveState = 'dirty'
       issues = []
+      changed()
     },
     load(text: string, size?: number) {
       try {
@@ -114,12 +117,19 @@ export function createWorkspace(initial = emptyDoc(nowJst(), createId('prj'))) {
       issues = []
       saveState = 'clean'
     },
-    exportJson(now: string, updatedBy: string | null) {
+    /** `written`: the caller writes the file itself (direct save), so the result is not just a download request. */
+    exportJson(now: string, updatedBy: string | null, written = false) {
       const out = prepareExport(doc, now, updatedBy)
       doc = freeze(out.doc)
       exportedRevision = out.doc.project.revision
-      saveState = 'exportRequested'
+      saveState = written ? 'clean' : 'exportRequested'
       return out
+    },
+    markDirty() {
+      saveState = 'dirty'
+    },
+    onChange(listener: () => void) {
+      changed = listener
     },
     clearIssues() {
       issues = []

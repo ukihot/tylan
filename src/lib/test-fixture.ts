@@ -1,6 +1,42 @@
 import { emptyDoc, newEntity } from './schema'
 export const NOW = '2026-11-05T14:30:00+09:00'
 export const id = (prefix: string, n: number) => `${prefix}_${String(n).padStart(16, '0')}`
+/** In-memory stand-in for the browser file pickers (tests cannot click native dialogs). */
+export function fakeFilePickers(target: object = window) {
+  const files = new Map<string, { text: string; lastModified: number }>()
+  const state = { files, toOpen: '' }
+  const handle = (name: string) => ({
+    name,
+    kind: 'file',
+    async getFile() {
+      const f = files.get(name)!
+      return new File([f.text], name, { lastModified: f.lastModified })
+    },
+    async createWritable() {
+      const parts: (string | Blob)[] = []
+      return {
+        async write(chunk: string | Blob) {
+          parts.push(chunk)
+        },
+        async close() {
+          const f = files.get(name)!
+          f.text = await new Blob(parts).text()
+          f.lastModified++
+        },
+      }
+    },
+  })
+  Object.assign(target, {
+    async showSaveFilePicker(options: { suggestedName: string }) {
+      files.set(options.suggestedName, { text: '', lastModified: 1 })
+      return handle(options.suggestedName)
+    },
+    async showOpenFilePicker() {
+      return [handle(state.toOpen)]
+    },
+  })
+  return state
+}
 export function fixture() {
   const doc = emptyDoc(NOW, id('prj', 1))
   doc.sites.push({ ...newEntity('sites', id('sit', 1)), name: '東京' })

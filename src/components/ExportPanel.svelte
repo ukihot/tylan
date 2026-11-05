@@ -2,7 +2,7 @@
   import viewerTemplate from 'virtual:viewer-template'
   import { documentCsv } from '../lib/csv'
   import { exportFilename, prepareExport } from '../lib/io'
-  import { download, nowJst } from '../lib/platform'
+  import { canWriteFiles, download, nowJst, saveAs } from '../lib/platform'
   import { labels } from '../lib/presentation'
   import { createViewer, toPublic } from '../lib/publish'
   import { entityHref } from '../lib/routes'
@@ -15,7 +15,10 @@
   let previewed = $state('')
   const doc = $derived(workspace.doc)
   const settings = $derived(doc.publishSettings)
-  const settingsKey = $derived(JSON.stringify({ settings, doc }))
+  // The JSON file is edited directly; only the fallback (no file access) needs JSON download buttons.
+  const directSave = canWriteFiles()
+  // Autosave bumps the revision; that alone must not invalidate a reviewed preview.
+  const settingsKey = $derived(JSON.stringify({ ...doc, project: null }))
   const counts = $derived.by(() => {
     try {
       const p = toPublic(doc, settings, nowJst())
@@ -65,28 +68,47 @@
         '同じ版のJSON・閲覧用HTMLの書き出しを要求しました。両方のダウンロードを確認してください。共有への反映は未確認です。'
     })
   }
+  async function save(content: string, filename: string, type: string, what: string) {
+    error = ''
+    message = ''
+    try {
+      const result = await saveAs(content, filename, type)
+      if (result === 'saved') {
+        message = `${what}を保存しました。`
+      } else if (result === 'downloaded') {
+        message = `${what}のダウンロードを要求しました。保存先を確認してください。`
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+    }
+  }
   function viewer() {
+    let html = ''
     guard(() => {
-      const now = nowJst()
-      const pub = toPublic(doc, settings, now)
-      download(
-        createViewer(viewerTemplate, pub),
-        exportFilename('viewer', doc.project.revision, now, 'html'),
-        'text/html;charset=utf-8',
-      )
-      message = '閲覧用HTMLの書き出しを要求しました。同じ版のJSONと組にして配置してください。'
+      html = createViewer(viewerTemplate, toPublic(doc, settings, nowJst()))
     })
+    if (html) {
+      void save(
+        html,
+        exportFilename('viewer', doc.project.revision, nowJst(), 'html'),
+        'text/html;charset=utf-8',
+        `閲覧用HTML（r${String(doc.project.revision).padStart(4, '0')}）`,
+      )
+    }
   }
   function csv(kind: 'assets' | 'ports' | 'audit' | 'actions') {
+    let text = ''
     guard(() => {
-      const now = nowJst()
-      download(
-        documentCsv(doc, kind),
-        exportFilename(kind, doc.project.revision, now, 'csv'),
-        'text/csv;charset=utf-8',
-      )
-      message = 'CSVの書き出しを要求しました。'
+      text = documentCsv(doc, kind)
     })
+    if (text) {
+      void save(
+        text,
+        exportFilename(kind, doc.project.revision, nowJst(), 'csv'),
+        'text/csv;charset=utf-8',
+        'CSV',
+      )
+    }
   }
 </script>
 <section class="panel">
@@ -117,12 +139,14 @@
       </li>
     {/each}
   </ul>
-  <h3>正本JSON</h3>
-  <label>更新者<input bind:value={updatedBy} maxlength="100" placeholder="未設定"></label>
-  <button type="button" onclick={json}>JSONを書き出す</button>
-  <p class="hint">
-    版を1つ増やしてダウンロードを要求します。共有上の現行版と編集開始版を照合し、旧版をarchiveへ退避してください。
-  </p>
+  {#if !directSave}
+    <h3>正本JSON</h3>
+    <label>更新者<input bind:value={updatedBy} maxlength="100" placeholder="未設定"></label>
+    <button type="button" onclick={json}>JSONを書き出す</button>
+    <p class="hint">
+      版を1つ増やしてダウンロードを要求します。共有上の現行版と編集開始版を照合し、旧版をarchiveへ退避してください。
+    </p>
+  {/if}
   <h3>閲覧用HTMLの公開範囲</h3>
   <p>検索・図のフィルターとは独立した設定です。公開しない値はHTMLに含めません。</p>
   <fieldset>
@@ -181,26 +205,32 @@
     </div>
   {/if}
   <div class="toolbar">
+    {#if !directSave}
+      <button
+        type="button"
+        class="primary"
+        disabled={!counts || !settings.siteIds.length || previewed !== settingsKey}
+        onclick={pair}
+      >
+        JSON・閲覧用HTMLを同じ版で書き出す
+      </button>
+    {/if}
     <button
       type="button"
-      class="primary"
-      disabled={!counts || !settings.siteIds.length || previewed !== settingsKey}
-      onclick={pair}
-    >
-      JSON・閲覧用HTMLを同じ版で書き出す
-    </button>
-    <button
-      type="button"
+      class:primary={directSave}
       disabled={workspace.saveState === 'dirty' ||
+        !counts ||
         !settings.siteIds.length ||
         previewed !== settingsKey}
       onclick={viewer}
     >
-      現在版の閲覧用HTMLを書き出す
+      {directSave ? '閲覧用HTMLを保存' : '現在版の閲覧用HTMLを書き出す'}
     </button>
   </div>
   <p class="hint">
-    候補はダウンロード先にも残ります。社内規則に従って保管してください。JSONとHTMLは自動同期しません。
+    {directSave
+      ? '保存先は共有フォルダの published を選んでください。閲覧用HTMLはJSONの保存済みの版で作り、以後の変更は自動では反映されません。'
+      : '候補はダウンロード先にも残ります。社内規則に従って保管してください。JSONとHTMLは自動同期しません。'}
   </p>
   <h3>CSV</h3>
   <div class="toolbar">

@@ -3,11 +3,11 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { type Browser, type BrowserContext, chromium } from 'playwright'
+import { type Browser, type BrowserContext, chromium, type Page } from 'playwright'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { createViewer, toPublic } from '../src/lib/publish'
 import { sampleDoc } from '../src/lib/sample'
-import { fixture, id, NOW } from '../src/lib/test-fixture'
+import { fakeFilePickers, fixture, id, NOW } from '../src/lib/test-fixture'
 
 let browser: Browser
 const browserVersions: Record<string, string> = {}
@@ -34,6 +34,22 @@ async function offlineContext() {
   context.on('page', (p) => p.on('pageerror', (e) => errors.push(e.message)))
   return { context, requests, errors }
 }
+// Native file dialogs cannot be clicked in automation; replace them with in-memory files.
+type Fake = ReturnType<typeof fakeFilePickers>
+async function openJsonFile(page: Page, json: string) {
+  await page.addInitScript(`window.__fake = (${fakeFilePickers.toString()})(window)`)
+  await page.reload()
+  await page.evaluate((text) => {
+    const fake = (window as unknown as { __fake: Fake }).__fake
+    fake.files.set('network.json', { text, lastModified: 1 })
+    fake.toOpen = 'network.json'
+  }, json)
+  await page.getByRole('button', { name: /既存のJSONを開く/ }).click()
+}
+const savedFiles = (page: Page) =>
+  page.evaluate(() =>
+    Object.fromEntries((window as unknown as { __fake: Fake }).__fake.files),
+  ) as Promise<Record<string, { text: string }>>
 async function noExternalResources(context: BrowserContext) {
   const page = context.pages()[0]!
   const resources = await page.evaluate(() =>
@@ -58,13 +74,8 @@ test('編集用HTMLがオフラインのfile://で起動し、読込・図・公
   try {
     const page = await context.newPage()
     await page.goto(pathToFileURL(resolve('dist/editor.html')).href)
-    await page.getByRole('heading', { name: '調査から、構成図へ。' }).waitFor()
-    const doc = fixture()
-    await page.getByLabel('JSONファイル', { exact: true }).setInputFiles({
-      name: 'network.json',
-      mimeType: 'application/json',
-      buffer: Buffer.from(JSON.stringify(doc)),
-    })
+    await page.getByRole('heading', { name: '監査用のJSONファイルを用意します' }).waitFor()
+    await openJsonFile(page, JSON.stringify(fixture()))
     await page.getByRole('button', { name: '東京', exact: true }).waitFor()
     await page.getByRole('link', { name: 'トポロジー', exact: true }).click()
     await page.locator('.device-node').first().waitFor()
@@ -77,14 +88,15 @@ test('編集用HTMLがオフラインのfile://で起動し、読込・図・公
     expect(await png.failure()).toBeNull()
     await page.getByRole('link', { name: '検証・書き出し', exact: true }).click()
     await page.getByRole('checkbox', { name: '東京', exact: true }).check()
+    // Ticking a site is a change: it is autosaved to the opened file as revision 1.
+    await expect
+      .poll(async () => JSON.parse((await savedFiles(page))['network.json']!.text).project.revision)
+      .toBe(1)
     await page.getByRole('button', { name: '公開プレビューを確認' }).click()
-    const downloads: string[] = []
-    page.on('download', (d) => downloads.push(d.suggestedFilename()))
-    await page.getByRole('button', { name: 'JSON・閲覧用HTMLを同じ版で書き出す' }).click()
-    await page.getByRole('status').waitFor()
-    await expect.poll(() => downloads.length).toBe(2)
-    expect(downloads.some((n) => n.startsWith('network-r0001'))).toBe(true)
-    expect(downloads.some((n) => n.startsWith('viewer-r0001'))).toBe(true)
+    await page.getByRole('button', { name: '閲覧用HTMLを保存' }).click()
+    await page.getByText(/閲覧用HTML（r0001）を保存しました/).waitFor()
+    const saved = Object.keys(await savedFiles(page))
+    expect(saved.some((n) => n.startsWith('viewer-r0001'))).toBe(true)
     expect(errors).toEqual([])
     expect(requests).toEqual([])
     await noExternalResources(context)
@@ -137,12 +149,8 @@ test.runIf(existsSync('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.
       const errors: string[] = []
       page.on('pageerror', (error) => errors.push(error.message))
       await page.goto(pathToFileURL(resolve('dist/editor.html')).href)
-      await page.getByRole('heading', { name: '調査から、構成図へ。' }).waitFor()
-      await page.getByLabel('JSONファイル', { exact: true }).setInputFiles({
-        name: 'sample.json',
-        mimeType: 'application/json',
-        buffer: Buffer.from(JSON.stringify(sampleDoc())),
-      })
+      await page.getByRole('heading', { name: '監査用のJSONファイルを用意します' }).waitFor()
+      await openJsonFile(page, JSON.stringify(sampleDoc()))
       await page.getByRole('link', { name: 'トポロジー', exact: true }).click()
       await page.locator('.device-node').first().waitFor()
       expect(await page.locator('.device-node').count()).toBe(9)

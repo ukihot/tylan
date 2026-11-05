@@ -3,11 +3,12 @@ import { render } from 'vitest-browser-svelte'
 import App from './App.svelte'
 import EntityScreen from './components/EntityScreen.svelte'
 import { createWorkspace } from './lib/store.svelte'
-import { fixture, id, NOW } from './lib/test-fixture'
+import { fakeFilePickers, fixture, id, NOW } from './lib/test-fixture'
 
-test('新規プロジェクトから拠点・機器を登録し、キャンセル・Undoが動作する', async () => {
+test('新しいJSONを作って拠点・機器を登録し、キャンセル・Undoが動作する', async () => {
+  fakeFilePickers()
   const screen = await render(App)
-  await screen.getByRole('button', { name: '新規プロジェクト' }).click()
+  await screen.getByRole('button', { name: /新しいJSONを作る/ }).click()
   await screen.getByRole('button', { name: '拠点を追加' }).click()
   await screen.getByRole('textbox', { name: '名称', exact: true }).fill('本社')
   await screen.getByRole('button', { name: '確定', exact: true }).click()
@@ -60,7 +61,9 @@ test('runesの単一正本、10世代Undo、不正読込の保護、出力状態
 
 test('入力中の画面移動を止め、続行を選ぶまで下書きを保持する', async () => {
   window.location.hash = '#/project'
+  fakeFilePickers()
   const screen = await render(App)
+  await screen.getByRole('button', { name: /新しいJSONを作る/ }).click()
   await screen.getByRole('button', { name: '拠点を追加' }).click()
   await screen.getByRole('textbox', { name: '名称', exact: true }).fill('入力途中の拠点')
   await screen.getByRole('link', { name: '機器・資産台帳', exact: true }).click()
@@ -96,4 +99,41 @@ test('回次作成画面から20項目を生成し、監査必須欄エラーで
     .element(screen.getByRole('combobox', { name: '判定', exact: true }))
     .toHaveValue('ok')
   expect(workspace.doc.auditResults[0]!.judgment).toBe('unchecked')
+})
+
+test('確定した変更はJSONへ自動保存され、開き直すと復元。他所の変更は上書きしない', async () => {
+  window.location.hash = '#/project'
+  const fake = fakeFilePickers()
+  const first = await render(App)
+  // No editing before a file exists.
+  await expect.element(first.getByRole('button', { name: '拠点を追加' })).not.toBeInTheDocument()
+  await first.getByRole('button', { name: /新しいJSONを作る/ }).click()
+  const name = `network-${new Date().getFullYear()}.json`
+  await expect.poll(() => fake.files.get(name)?.text ?? '').toContain('"format": "tylan"')
+  await first.getByRole('button', { name: '拠点を追加' }).click()
+  await first.getByRole('textbox', { name: '名称', exact: true }).fill('本社')
+  await first.getByRole('button', { name: '確定', exact: true }).click()
+  await expect.poll(() => fake.files.get(name)!.text, { timeout: 3000 }).toContain('本社')
+  await expect.element(first.getByText(/^保存済み/)).toBeVisible()
+  await first.unmount()
+
+  // Reload: the data lives in the file, not in the page.
+  fake.toOpen = name
+  const second = await render(App)
+  await second.getByRole('button', { name: /既存のJSONを開く/ }).click()
+  await expect.element(second.getByRole('button', { name: '本社', exact: true })).toBeVisible()
+
+  // Someone else changes the file: autosave must stop instead of overwriting.
+  fake.files.get(name)!.lastModified += 100
+  const outside = fake.files.get(name)!.text
+  await second.getByRole('button', { name: '本社', exact: true }).click()
+  await second.getByRole('button', { name: '編集', exact: true }).click()
+  await second.getByRole('textbox', { name: '名称', exact: true }).fill('本社ビル')
+  await second.getByRole('button', { name: '確定', exact: true }).click()
+  await expect
+    .element(second.getByText(/ファイルが別の場所で変更されています/), { timeout: 3000 })
+    .toBeVisible()
+  expect(fake.files.get(name)!.text).toBe(outside)
+  await second.getByRole('button', { name: 'この画面の内容で上書きする' }).click()
+  await expect.poll(() => fake.files.get(name)!.text).toContain('本社ビル')
 })

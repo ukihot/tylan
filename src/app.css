@@ -271,6 +271,35 @@ main {
   color: #7b8c9c;
   margin-top: 6px;
 }
+.start-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin: 24px 0;
+}
+.start-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  padding: 20px;
+  border-radius: 10px;
+}
+.start-card strong {
+  font-size: 16px;
+}
+.start-card span {
+  font-size: 12px;
+  opacity: 0.85;
+}
+.file-name {
+  font-size: 12px;
+  font-weight: 600;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .file-drop {
   border: 1px dashed #9cb7c9;
   background: #f7fafc;

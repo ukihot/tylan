@@ -4,12 +4,17 @@
   import FieldEditor from './components/FieldEditor.svelte'
   import Topology from './components/Topology.svelte'
   import { auditSummary } from './lib/audit-master'
+  import { createFileSession } from './lib/file-session.svelte'
+  import { canWriteFiles } from './lib/platform'
   import { collectionLabels } from './lib/presentation'
   import { entityHref, screenCollections, screens } from './lib/routes'
   import { type Collection, type Doc, MAX_BYTES, ProjectSchema } from './lib/schema'
   import { createWorkspace } from './lib/store.svelte'
 
   const workspace = createWorkspace()
+  // Edge/Chrome: edit the JSON file directly. Other browsers fall back to load + download.
+  const files = canWriteFiles() ? createFileSession(workspace) : null
+  let notice = $state('')
   let hash = $state(window.location.hash)
   let tab = $state<Collection>('sites')
   let projectDraft = $state<Doc['project'] | null>(null)
@@ -70,14 +75,29 @@
       fileError = 'ファイルを読み取れません。共有の接続とアクセス権を確認して再選択してください。'
     }
   }
+  function freshStart(message: string) {
+    projectDraft = null
+    entityEditing = false
+    session++
+    notice = message
+    window.location.hash = '#/project'
+  }
   function newProject() {
     destructive(() => {
       workspace.reset()
-      projectDraft = null
-      entityEditing = false
-      session++
-      window.location.hash = '#/project'
+      freshStart('新しい空のプロジェクトを作成しました。拠点の登録から始めてください。')
     })
+  }
+  async function fileAction(action: () => Promise<boolean>, done: () => string) {
+    notice = ''
+    if (await action()) {
+      freshStart(done())
+    }
+  }
+  async function closeFile() {
+    if (files && (await files.close())) {
+      notice = ''
+    }
   }
   function saveProject() {
     if (!projectDraft) {
@@ -92,8 +112,14 @@
       projectDraft = null
     }
   }
+  function keydown(event: KeyboardEvent) {
+    if (files?.isOpen && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault()
+      void files.flush()
+    }
+  }
   function beforeUnload(event: BeforeUnloadEvent) {
-    if (workspace.saveState === 'dirty' || editing) {
+    if (workspace.saveState === 'dirty' || editing || files?.status === 'saving') {
       event.preventDefault()
       event.returnValue = ''
     }
@@ -116,7 +142,7 @@
     }
   }
 </script>
-<svelte:window onhashchange={hashChanged} onbeforeunload={beforeUnload} />
+<svelte:window onhashchange={hashChanged} onbeforeunload={beforeUnload} onkeydown={keydown} />
 <div class="app-shell">
   <aside class="sidebar">
     <a href="#/project" class="brand">
@@ -152,9 +178,20 @@
         </span>
       </div>
       <div class="header-actions">
-        <span class={`save-state ${workspace.saveState}`}>
-          {editing ? '入力中（未確定）' : saveLabels[workspace.saveState]}
-        </span>
+        {#if files?.isOpen}
+          <span class="file-name" title="編集中のファイル">{files.fileName}</span>
+          <span
+            role="status"
+            class={`save-state ${files.status === 'saved' ? workspace.saveState : 'dirty'}`}
+          >
+            {editing ? `入力中（未確定） · ${files.label}` : files.label}
+          </span>
+          <button type="button" title="Ctrl+S" onclick={() => files.flush()}>今すぐ保存</button>
+        {:else if !files}
+          <span class={`save-state ${workspace.saveState}`}>
+            {editing ? '入力中（未確定）' : saveLabels[workspace.saveState]}
+          </span>
+        {/if}
         <button
           type="button"
           disabled={!workspace.undoCount || editing}
@@ -184,6 +221,26 @@
     {#if fileError}
       <p role="alert" class="error">{fileError}</p>
     {/if}
+    {#if files?.message}
+      <div role="alert" class="error">
+        <p>{files.message}</p>
+        {#if files.status === 'conflict'}
+          <button
+            type="button"
+            onclick={() =>
+              fileAction(files.reloadFromFile, () => 'ファイルの内容を読み込み直しました。')}
+          >
+            ファイルの内容を読み込み直す（この画面の変更は破棄）
+          </button>
+          <button type="button" class="danger" onclick={() => files.overwrite()}>
+            この画面の内容で上書きする
+          </button>
+        {/if}
+      </div>
+    {/if}
+    {#if notice}
+      <p role="status" class="notice">{notice}</p>
+    {/if}
     {#if workspace.issues.length}
       <div role="alert" class="error">
         <strong>変更を確定できませんでした</strong>
@@ -197,139 +254,202 @@
         </ul>
       </div>
     {/if}
-    {#if screen === 'project'}
+    {#if files && !files.isOpen}
       <section class="panel">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">PROJECT OVERVIEW</p>
-            <h2>調査から、構成図へ。</h2>
-            <p class="muted">資産・配線・設定・監査をひとつの正本で管理します。</p>
-          </div>
-          <button type="button" onclick={newProject}>新規プロジェクト</button>
-        </div>
-        <div class="stats">
-          <div>
-            <strong>{doc.sites.length}</strong>
-            <span>拠点</span>
-          </div>
-          <div>
-            <strong>{doc.devices.length}</strong>
-            <span>機器</span>
-          </div>
-          <div>
-            <strong>{doc.links.length}</strong>
-            <span>接続</span>
-          </div>
-          <div>
-            <strong>{summary.unchecked}</strong>
-            <span>最新回次の未確認 /{summary.total}総括</span>
-          </div>
-          <div>
-            <strong>{workspace.validation.warnings.length}</strong>
-            <span>確認が必要な警告</span>
-          </div>
-        </div>
-        <section
-          class="file-drop"
-          aria-label="JSONファイル読み込み"
-          ondragover={(e) => e.preventDefault()}
-          ondrop={(e) => {
-            e.preventDefault()
-            void readFile(e.dataTransfer?.files[0])
-          }}
-        >
-          <strong>正本JSONを読み込む</strong>
-          <p>ファイルをここへドロップ、または選択してください（10MiB以下）。</p>
-          <label class="file-label">
-            JSONファイル<input
-              type="file"
-              accept=".json,application/json"
-              onchange={(e) => {
-                void readFile(e.currentTarget.files?.[0])
-                e.currentTarget.value = ''
-              }}
-            >
-          </label>
-        </section>
-        {#if projectDraft}
-          <form
-            onsubmit={(e) => {
-              e.preventDefault()
-              saveProject()
-            }}
-          >
-            <FieldEditor
-              schema={ProjectSchema.omit({
-                id: true,
-                revision: true,
-                baseRevision: true,
-                appVersion: true,
-                createdAt: true,
-                updatedAt: true,
-              })}
-              bind:value={projectDraft}
-              {doc}
-              root
-            />
-            <button class="primary" type="submit">プロジェクトを確定</button>
-            <button type="button" onclick={() => (projectDraft = null)}>キャンセル</button>
-          </form>
-        {:else}
-          <button type="button" onclick={() => (projectDraft = structuredClone(doc.project))}>
-            プロジェクト情報を編集
-          </button>
-        {/if}
-      </section>
-    {/if}
-    {#if screen === 'topology'}
-      {#if route[1] === 'layouts'}
-        <EntityScreen
-          {workspace}
-          collection="layouts"
-          selectedId={route[2]}
-          {targetId}
-          ondraftchange={(active) => {
-            entityEditing = active
-          }}
-        />
-      {:else}
-        <Topology {doc} {workspace} />
-      {/if}
-    {:else if screen === 'export'}
-      <ExportPanel {workspace} />
-    {:else if choices.length}
-      <div class="subtabs" role="tablist" aria-label="データの種類">
-        {#each choices as c}
+        <p class="eyebrow">START</p>
+        <h2>監査用のJSONファイルを用意します</h2>
+        <p class="muted">
+          tylanはJSONファイルを直接編集します。確定した変更は自動でファイルへ保存されます。保存先は共有フォルダの
+          working を選んでください。
+        </p>
+        <div class="start-actions">
           <button
             type="button"
-            role="tab"
-            aria-selected={collection === c}
-            onclick={() => {
-              tab = c
-              window.location.hash = `#/${screen}/${c}`
-            }}
+            class="start-card primary"
+            onclick={() =>
+              fileAction(
+                files.createBlank,
+                () => `${files.fileName} を作成しました。拠点の登録から始めてください。`,
+              )}
           >
-            {collectionLabels[c]}
+            <strong>新しいJSONを作る</strong>
+            <span>空の状態から始めます。</span>
           </button>
-        {/each}
-      </div>
-      {#if screen === 'audit'}
-        <div class="notice">
-          最新回次の総括：問題なし{summary.ok} / 要対応{summary.ng} / 未確認{summary.unchecked} /
-          対象外{summary.na}（分母{summary.total}、対象別{summary.targets}件）
+          <button type="button" class="start-card" onclick={() => files.pickCopySource()}>
+            <strong>前回のJSONをもとに作る</strong>
+            <span>
+              機器・配線・過去の監査結果を引き継いだ別ファイルを作ります。元のファイルは変更しません。
+            </span>
+          </button>
+          <button
+            type="button"
+            class="start-card"
+            onclick={() => fileAction(files.open, () => `${files.fileName} を開きました。`)}
+          >
+            <strong>既存のJSONを開く</strong>
+            <span>作成済みのファイルの続きを編集します。</span>
+          </button>
         </div>
+        {#if files.copySource}
+          <div class="notice">
+            <p>「{files.copySource}」をもとにします。新しいファイルの保存先を選んでください。</p>
+            <button
+              type="button"
+              class="primary"
+              onclick={() =>
+                fileAction(
+                  files.createFromCopy,
+                  () =>
+                    `${files.fileName} を作成しました。監査の画面で今回の回次を追加してください。`,
+                )}
+            >
+              保存先を選んで作成
+            </button>
+            <button type="button" onclick={() => files.cancelCopy()}>やめる</button>
+          </div>
+        {/if}
+      </section>
+    {:else}
+      {#if screen === 'project'}
+        <section class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">PROJECT OVERVIEW</p>
+              <h2>調査から、構成図へ。</h2>
+              <p class="muted">資産・配線・設定・監査をひとつの正本で管理します。</p>
+            </div>
+            {#if files}
+              <button type="button" onclick={closeFile}>ファイルを閉じる</button>
+            {:else}
+              <button type="button" onclick={newProject}>新規プロジェクト</button>
+            {/if}
+          </div>
+          <div class="stats">
+            <div>
+              <strong>{doc.sites.length}</strong>
+              <span>拠点</span>
+            </div>
+            <div>
+              <strong>{doc.devices.length}</strong>
+              <span>機器</span>
+            </div>
+            <div>
+              <strong>{doc.links.length}</strong>
+              <span>接続</span>
+            </div>
+            <div>
+              <strong>{summary.unchecked}</strong>
+              <span>最新回次の未確認 /{summary.total}総括</span>
+            </div>
+            <div>
+              <strong>{workspace.validation.warnings.length}</strong>
+              <span>確認が必要な警告</span>
+            </div>
+          </div>
+          {#if !files}
+            <section
+              class="file-drop"
+              aria-label="JSONファイル読み込み"
+              ondragover={(e) => e.preventDefault()}
+              ondrop={(e) => {
+                e.preventDefault()
+                void readFile(e.dataTransfer?.files[0])
+              }}
+            >
+              <strong>正本JSONを読み込む</strong>
+              <p>ファイルをここへドロップ、または選択してください（10MiB以下）。</p>
+              <label class="file-label">
+                JSONファイル<input
+                  type="file"
+                  accept=".json,application/json"
+                  onchange={(e) => {
+                    void readFile(e.currentTarget.files?.[0])
+                    e.currentTarget.value = ''
+                  }}
+                >
+              </label>
+            </section>
+          {/if}
+          {#if projectDraft}
+            <form
+              onsubmit={(e) => {
+                e.preventDefault()
+                saveProject()
+              }}
+            >
+              <FieldEditor
+                schema={ProjectSchema.omit({
+                  id: true,
+                  revision: true,
+                  baseRevision: true,
+                  appVersion: true,
+                  createdAt: true,
+                  updatedAt: true,
+                })}
+                bind:value={projectDraft}
+                {doc}
+                root
+              />
+              <button class="primary" type="submit">プロジェクトを確定</button>
+              <button type="button" onclick={() => (projectDraft = null)}>キャンセル</button>
+            </form>
+          {:else}
+            <button type="button" onclick={() => (projectDraft = structuredClone(doc.project))}>
+              プロジェクト情報を編集
+            </button>
+          {/if}
+        </section>
       {/if}
-      {#key `${session}:${collection}:${route[2] ?? ''}`}
-        <EntityScreen
-          {workspace}
-          {collection}
-          {targetId}
-          selectedId={route[2]}
-          ondraftchange={(active) => {
-            entityEditing = active
-          }}
-        />
-      {/key}
+      {#if screen === 'topology'}
+        {#if route[1] === 'layouts'}
+          <EntityScreen
+            {workspace}
+            collection="layouts"
+            selectedId={route[2]}
+            {targetId}
+            ondraftchange={(active) => {
+              entityEditing = active
+            }}
+          />
+        {:else}
+          <Topology {doc} {workspace} />
+        {/if}
+      {:else if screen === 'export'}
+        <ExportPanel {workspace} />
+      {:else if choices.length}
+        <div class="subtabs" role="tablist" aria-label="データの種類">
+          {#each choices as c}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={collection === c}
+              onclick={() => {
+                tab = c
+                window.location.hash = `#/${screen}/${c}`
+              }}
+            >
+              {collectionLabels[c]}
+            </button>
+          {/each}
+        </div>
+        {#if screen === 'audit'}
+          <div class="notice">
+            最新回次の総括：問題なし{summary.ok} / 要対応{summary.ng} / 未確認{summary.unchecked} /
+            対象外{summary.na}（分母{summary.total}、対象別{summary.targets}件）
+          </div>
+        {/if}
+        {#key `${session}:${collection}:${route[2] ?? ''}`}
+          <EntityScreen
+            {workspace}
+            {collection}
+            {targetId}
+            selectedId={route[2]}
+            ondraftchange={(active) => {
+              entityEditing = active
+            }}
+          />
+        {/key}
+      {/if}
     {/if}
     <footer class="page-footer">
       線は実通信・疎通を保証しません。確認時点の情報として扱ってください。
