@@ -3,7 +3,7 @@
   import { documentCsv } from '../lib/csv'
   import type { FileSession } from '../lib/file-session.svelte'
   import { exportFilename } from '../lib/io'
-  import { nowJst, saveAs } from '../lib/platform'
+  import { nowJst } from '../lib/platform'
   import { labels } from '../lib/presentation'
   import { createViewer, toPublic } from '../lib/publish'
   import { entityHref } from '../lib/routes'
@@ -53,9 +53,10 @@
     void run(async () => {
       const text = documentCsv(doc, kind)
       const name = exportFilename(kind, doc.project.revision, nowJst(), 'csv')
-      return (await saveAs(text, name, 'text/csv;charset=utf-8'))
-        ? `${name} を保存しました。`
-        : null
+      if (!(await files.saveCsv(name, text))) {
+        throw new Error(files.message || 'CSVを保存できませんでした')
+      }
+      return `working\\csv\\${name} に保存しました。`
     })
   }
 </script>

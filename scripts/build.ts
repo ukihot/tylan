@@ -1,16 +1,23 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { parseConfigFileTextToJson } from 'typescript'
 import { build } from 'vite'
 
 await build({ mode: 'viewer' })
 await build({ mode: 'editor' })
 await mkdir('dist', { recursive: true })
-const html = await readFile('dist/editor.html')
-await writeFile(
-  'dist/SHA256SUMS.txt',
-  `${createHash('sha256').update(html).digest('hex')}  editor.html\n`,
-)
+// The launcher does the share I/O (Edge cannot write to SMB itself); it ships next to editor.html in tools\.
+await copyFile('launcher/tylan.ps1', 'dist/tylan.ps1')
+await copyFile('launcher/tylan.cmd', 'dist/tylan.cmd')
+const sums = []
+for (const name of ['editor.html', 'tylan.cmd', 'tylan.ps1']) {
+  sums.push(
+    `${createHash('sha256')
+      .update(await readFile(`dist/${name}`))
+      .digest('hex')}  ${name}\n`,
+  )
+}
+await writeFile('dist/SHA256SUMS.txt', sums.join(''))
 const lock = parseConfigFileTextToJson('bun.lock', await readFile('bun.lock', 'utf8')).config as {
   packages: Record<string, [string, ...unknown[]]>
 }

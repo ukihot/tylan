@@ -235,7 +235,7 @@ export function toGraph(doc: GraphDoc, siteId: string, options: GraphOptions = {
       label: [`${uncertain ? '? ' : ''}${portName('a')} ↔ ${portName('b')}`, ...details].join(
         ' · ',
       ),
-      style: `stroke:${badge.judgment === 'ng' ? '#dc4545' : l.kind === 'logical' ? '#8995a7' : '#507590'};stroke-width:${l.kind === 'wireless' ? 1 : 2};${uncertain || l.kind !== 'physical' ? `stroke-dasharray:${l.kind === 'wireless' ? '2 5' : '7 5'};` : ''}${options.selectedId && ![source, target].includes(options.selectedId) ? 'opacity:0.2;' : ''}`,
+      style: `stroke:${badge.judgment === 'ng' ? 'var(--map-alert)' : l.kind === 'logical' ? 'var(--map-muted)' : 'var(--map-link)'};stroke-width:${l.kind === 'wireless' ? 1.5 : 2};${uncertain || l.kind !== 'physical' ? `stroke-dasharray:${l.kind === 'wireless' ? '2 5' : '7 5'};` : ''}${options.selectedId && ![source, target].includes(options.selectedId) ? 'opacity:0.2;' : ''}`,
       animated: false,
     })
   }
@@ -255,7 +255,7 @@ export function toGraph(doc: GraphDoc, siteId: string, options: GraphOptions = {
         position: { x, y },
         width,
         height,
-        style: `width:${width}px;height:${height}px;background:#edf3f850;border:1px solid #b8cad9;border-radius:14px`,
+        style: `width:${width}px;height:${height}px;background:var(--map-group);border:1px solid var(--map-group-border);border-radius:4px`,
         draggable: false,
         selectable: false,
         zIndex: -1,

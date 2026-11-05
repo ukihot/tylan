@@ -3,19 +3,17 @@ import { render } from 'vitest-browser-svelte'
 import App from './App.svelte'
 import EntityScreen from './components/EntityScreen.svelte'
 import { createWorkspace } from './lib/store.svelte'
-import { fakeTylanFolder, fixture, id, NOW } from './lib/test-fixture'
+import { fixture, id, memoryFolder, NOW } from './lib/test-fixture'
 
 type Screen = Awaited<ReturnType<typeof render>>
 const jsonName = `network-${new Date().getFullYear()}.json`
 async function createJson(screen: Screen) {
-  await screen.getByRole('button', { name: 'tylan フォルダを選ぶ' }).click()
   await screen.getByRole('button', { name: '作成して編集を始める' }).click()
   await expect.element(screen.getByRole('button', { name: '拠点を追加' })).toBeVisible()
 }
 
 test('新しいJSONを作って拠点・機器を登録し、キャンセル・Undoが動作する', async () => {
-  fakeTylanFolder()
-  const screen = await render(App)
+  const screen = await render(App, { folder: memoryFolder().folder })
   await createJson(screen)
   await screen.getByRole('button', { name: '拠点を追加' }).click()
   await screen.getByRole('textbox', { name: '名称', exact: true }).fill('本社')
@@ -69,8 +67,7 @@ test('runesの単一正本、10世代Undo、不正読込の保護、出力状態
 
 test('入力中の画面移動を止め、続行を選ぶまで下書きを保持する', async () => {
   window.location.hash = '#/project'
-  fakeTylanFolder()
-  const screen = await render(App)
+  const screen = await render(App, { folder: memoryFolder().folder })
   await createJson(screen)
   await screen.getByRole('button', { name: '拠点を追加' }).click()
   await screen.getByRole('textbox', { name: '名称', exact: true }).fill('入力途中の拠点')
@@ -109,14 +106,23 @@ test('回次作成画面から20項目を生成し、監査必須欄エラーで
   expect(workspace.doc.auditResults[0]!.judgment).toBe('unchecked')
 })
 
+test('起動プログラムなしでは編集不可', async () => {
+  const screen = await render(App, { folder: null })
+  await expect
+    .element(screen.getByRole('heading', { name: /tylan\.cmd から起動してください/ }))
+    .toBeVisible()
+  await expect.element(screen.getByRole('button', { name: '拠点を追加' })).not.toBeInTheDocument()
+})
+
 test('JSONを握るまで編集不可。変更はworkingへ自動保存され、開き直し・前回分の引き継ぎができ、他所の変更は上書きしない', async () => {
   window.location.hash = '#/project'
-  const fake = fakeTylanFolder()
+  const fake = memoryFolder()
   const path = `working/${jsonName}`
-  const first = await render(App)
+  const first = await render(App, { folder: fake.folder })
+  await expect.element(first.getByRole('button', { name: '作成して編集を始める' })).toBeVisible()
   await expect.element(first.getByRole('button', { name: '拠点を追加' })).not.toBeInTheDocument()
   await createJson(first)
-  await expect.poll(() => fake.files.get(path)?.text).toContain('"format": "tylan"')
+  expect(fake.files.get(path)?.text).toContain('"format": "tylan"')
   await first.getByRole('button', { name: '拠点を追加' }).click()
   await first.getByRole('textbox', { name: '名称', exact: true }).fill('本社')
   await first.getByRole('button', { name: '確定', exact: true }).click()
@@ -125,13 +131,12 @@ test('JSONを握るまで編集不可。変更はworkingへ自動保存され、
   await first.unmount()
 
   // Browser closed and reopened: the data lives in the file, not in the page.
-  const second = await render(App)
-  await second.getByRole('button', { name: 'tylan フォルダを選ぶ' }).click()
+  const second = await render(App, { folder: fake.folder })
   await second.getByRole('button', { name: `${jsonName} を開く` }).click()
   await expect.element(second.getByRole('button', { name: '本社', exact: true })).toBeVisible()
 
-  // Someone else changes the file: autosave must stop instead of overwriting.
-  fake.files.get(path)!.lastModified += 100
+  // Another PC saves the file: autosave must stop instead of overwriting.
+  fake.touch(path)
   const outside = fake.files.get(path)!.text
   await second.getByRole('button', { name: '本社', exact: true }).click()
   await second.getByRole('button', { name: '編集', exact: true }).click()
@@ -150,6 +155,6 @@ test('JSONを握るまで編集不可。変更はworkingへ自動保存され、
   await second.getByRole('textbox', { name: 'ファイル名' }).fill('network-next.json')
   await second.getByRole('button', { name: '作成して編集を始める' }).click()
   await expect.element(second.getByText('network-next.json', { exact: true })).toBeVisible()
-  await expect.poll(() => fake.files.get('working/network-next.json')!.text).toContain('本社ビル')
+  expect(fake.files.get('working/network-next.json')!.text).toContain('本社ビル')
   expect(fake.files.get(path)!.text).toBe(before)
 })

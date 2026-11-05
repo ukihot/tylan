@@ -1,20 +1,41 @@
 <script lang="ts">
+  import { onMount, untrack } from 'svelte'
   import EntityScreen from './components/EntityScreen.svelte'
   import ExportPanel from './components/ExportPanel.svelte'
   import FieldEditor from './components/FieldEditor.svelte'
   import Topology from './components/Topology.svelte'
   import { auditSummary } from './lib/audit-master'
   import { createFileSession } from './lib/file-session.svelte'
-  import { canWriteFiles, nowJst } from './lib/platform'
+  import { type Folder, launcherFolder } from './lib/folder'
+  import { nowJst } from './lib/platform'
   import { collectionLabels } from './lib/presentation'
   import { entityHref, screenCollections, screens } from './lib/routes'
   import { type Collection, type Doc, ProjectSchema } from './lib/schema'
   import { createWorkspace } from './lib/store.svelte'
 
+  // Tests pass an in-memory folder; in use it is the share, reached through tools\tylan.cmd.
+  let props: { folder?: Folder | null } = $props()
   const workspace = createWorkspace()
+  // Read once at start: the folder never changes during a session.
+  const folder = untrack(() => (props.folder === undefined ? launcherFolder() : props.folder))
   // Editing always happens inside a JSON file in the shared tylan\working folder: no file, no editing.
-  const supported = canWriteFiles()
-  const files = createFileSession(workspace)
+  const files = folder ? createFileSession(workspace, folder) : null
+  onMount(() => {
+    if (!files) {
+      return
+    }
+    void files.connect().then(() => {
+      copyFrom = files.jsonFiles[0] ?? ''
+    })
+    // Hidden tabs are throttled to about one timer per minute; the launcher waits 3 minutes.
+    const ping = () => void files.ping()
+    const timer = setInterval(ping, 10000)
+    document.addEventListener('visibilitychange', ping)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', ping)
+    }
+  })
   let notice = $state('')
   let newName = $state(`network-${nowJst().slice(0, 4)}.json`)
   let copyFrom = $state('')
@@ -52,15 +73,9 @@
       window.location.hash = '#/project'
     }
   }
-  async function chooseFolder() {
-    notice = ''
-    if (await files.chooseFolder()) {
-      copyFrom = files.jsonFiles[0] ?? ''
-    }
-  }
   async function closeFile() {
     notice = ''
-    if (await files.close()) {
+    if (files && (await files.close())) {
       copyFrom = files.jsonFiles[0] ?? ''
     }
   }
@@ -78,13 +93,13 @@
     }
   }
   function keydown(event: KeyboardEvent) {
-    if (files.isOpen && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    if (files?.isOpen && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
       event.preventDefault()
       void files.flush()
     }
   }
   function beforeUnload(event: BeforeUnloadEvent) {
-    if (workspace.saveState === 'dirty' || editing || files.status === 'saving') {
+    if (workspace.saveState === 'dirty' || editing || files?.status === 'saving') {
       event.preventDefault()
       event.returnValue = ''
     }
@@ -143,7 +158,7 @@
         </span>
       </div>
       <div class="header-actions">
-        {#if files.isOpen}
+        {#if files?.isOpen}
           <span class="file-name" title="編集中のファイル">{files.fileName}</span>
           <span
             role="status"
@@ -179,7 +194,7 @@
         <button type="button" onclick={() => (pending = null)}>現在の作業を続ける</button>
       </div>
     {/if}
-    {#if files.message}
+    {#if files?.message}
       <div role="alert" class="error">
         <p>{files.message}</p>
         {#if files.status === 'conflict'}
@@ -212,38 +227,34 @@
         </ul>
       </div>
     {/if}
-    {#if !supported}
+    {#if !files}
       <section class="panel">
         <p class="eyebrow">START</p>
-        <h2>この画面では編集を始められません</h2>
+        <h2>tools フォルダの tylan.cmd から起動してください</h2>
         <p>
-          tylanは共有フォルダのJSONへ直接保存します。このブラウザーではその機能（File System Access
-          API）が使えないため、データが失われないよう編集を止めています。
+          Edgeは共有フォルダへ直接保存できないため、tylanは起動用の tylan.cmd
+          が保存を受け持ちます。editor.html
+          を直接開いた場合は、データが失われないよう編集を止めています。
         </p>
-        <ul>
-          <li>Microsoft Edge か Google Chrome で editor.html を開いてください。</li>
+        <ol>
+          <li>エクスプローラーで tylan\tools フォルダを開きます。</li>
+          <li>tylan.cmd をダブルクリックします。黒い窓が開き、編集画面が別の窓で開きます。</li>
           <li>
-            Edgeでもこの表示になる場合は、社内ポリシーで制限されている可能性があります。情報システム担当へ相談してください。
+            編集が終わるまで黒い窓は閉じないでください（編集画面を閉じると数分で自動終了します）。
           </li>
-        </ul>
-        <p class="hint">
-          診断：セキュアコンテキスト{window.isSecureContext ? 'はい' : 'いいえ'} / フォルダ選択
-          {'showDirectoryPicker' in window ? 'あり' : 'なし'}
-        </p>
+        </ol>
       </section>
-    {:else if !files.hasFolder}
+    {:else if !files.connected}
       <section class="panel">
-        <p class="eyebrow">STEP 1 / 2</p>
-        <h2>tylan フォルダを選んでください</h2>
-        <p class="muted">
-          editor.html が入っている tools フォルダの、ひとつ上のフォルダです。JSONはその中の working
-          フォルダへ自動で保存されます。初回はEdgeがフォルダの編集を許可するか確認します。
-        </p>
-        <button type="button" class="primary" onclick={chooseFolder}>tylan フォルダを選ぶ</button>
+        <p class="eyebrow">START</p>
+        <h2>共有フォルダに接続しています…</h2>
+        {#if files.message}
+          <button type="button" onclick={() => files.connect()}>もう一度接続する</button>
+        {/if}
       </section>
     {:else if !files.isOpen}
       <section class="panel">
-        <p class="eyebrow">STEP 2 / 2 ·{files.folderName}\working</p>
+        <p class="eyebrow">{files.root}\working</p>
         <h2>編集するJSONを選んでください</h2>
         <div class="start-actions">
           <div class="start-card">
@@ -290,7 +301,6 @@
             <span>引き継ぎ元のファイルは変更しません。</span>
           </form>
         </div>
-        <button type="button" class="quiet" onclick={chooseFolder}>フォルダを選び直す</button>
       </section>
     {:else}
       {#if screen === 'project'}

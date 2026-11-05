@@ -58,7 +58,9 @@ export function standalonePlugin(mode: string): Plugin {
         const hashes = scripts
           .map((code) => `'sha256-${createHash('sha256').update(code).digest('base64')}'`)
           .join(' ')
-        const csp = `default-src 'none'; script-src ${hashes}; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'`
+        // The editor talks only to the local launcher that served it (same origin); the viewer talks to nothing.
+        const connect = mode === 'viewer' ? "'none'" : "'self'"
+        const csp = `default-src 'none'; script-src ${hashes}; style-src 'unsafe-inline'; img-src data: blob:; connect-src ${connect}; base-uri 'none'; form-action 'none'`
         html = html.replace(
           '<head>',
           `<head><meta http-equiv="Content-Security-Policy" content="${csp}">`,

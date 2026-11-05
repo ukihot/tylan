@@ -173,54 +173,59 @@
         {/each}
       </select>
     </label>
-    <label>
-      設置場所<select bind:value={locationId}>
-        <option value="">すべて</option>
-        {#each doc.locations.filter((l) => l.siteId === activeSite) as l}
-          <option value={l.id}>{l.name}</option>
-        {/each}
-      </select>
-    </label>
-    <label>
-      確認状況<select bind:value={observation}>
-        <option value="">すべて</option>
-        {#each ['unknown', 'observed', 'notObserved'] as state}
-          <option value={state}>{valueLabels[state]}</option>
-        {/each}
-      </select>
-    </label>
-    {#if doc.segments}
-      <label>
-        VLAN・セグメント<select bind:value={segmentId}>
-          <option value="">すべて</option>
-          {#each doc.segments.filter((s) => s.siteId === activeSite) as s}
-            <option value={s.id}>{s.name} · VLAN{s.vlanId ?? '不明'}</option>
-          {/each}
-        </select>
-      </label>
-    {/if}
-    {#if doc.wirelessNetworks}
-      <label>
-        SSID<select bind:value={wirelessId}>
-          <option value="">すべて</option>
-          {#each doc.wirelessNetworks.filter((w) => w.siteId === activeSite) as w}
-            <option value={w.id}>{w.ssid}</option>
-          {/each}
-        </select>
-      </label>
-    {/if}
-    <label>
-      回次<select
-        value={roundId || doc.auditRounds.at(-1)?.id || ''}
-        onchange={(e) => (roundId = e.currentTarget.value)}
-      >
-        {#each doc.auditRounds as r}
-          <option value={r.id}>{r.name}</option>
-        {:else}
-          <option value="">記録なし</option>
-        {/each}
-      </select>
-    </label>
+    <details class="advanced-filters">
+      <summary>詳細フィルター（設置場所・確認状況・VLAN・SSID・回次）</summary>
+      <div class="advanced-filter-fields">
+        <label>
+          設置場所<select bind:value={locationId}>
+            <option value="">すべて</option>
+            {#each doc.locations.filter((l) => l.siteId === activeSite) as l}
+              <option value={l.id}>{l.name}</option>
+            {/each}
+          </select>
+        </label>
+        <label>
+          確認状況<select bind:value={observation}>
+            <option value="">すべて</option>
+            {#each ['unknown', 'observed', 'notObserved'] as state}
+              <option value={state}>{valueLabels[state]}</option>
+            {/each}
+          </select>
+        </label>
+        {#if doc.segments}
+          <label>
+            VLAN・セグメント<select bind:value={segmentId}>
+              <option value="">すべて</option>
+              {#each doc.segments.filter((s) => s.siteId === activeSite) as s}
+                <option value={s.id}>{s.name} · VLAN{s.vlanId ?? '不明'}</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
+        {#if doc.wirelessNetworks}
+          <label>
+            SSID<select bind:value={wirelessId}>
+              <option value="">すべて</option>
+              {#each doc.wirelessNetworks.filter((w) => w.siteId === activeSite) as w}
+                <option value={w.id}>{w.ssid}</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
+        <label>
+          回次<select
+            value={roundId || doc.auditRounds.at(-1)?.id || ''}
+            onchange={(e) => (roundId = e.currentTarget.value)}
+          >
+            {#each doc.auditRounds as r}
+              <option value={r.id}>{r.name}</option>
+            {:else}
+              <option value="">記録なし</option>
+            {/each}
+          </select>
+        </label>
+      </div>
+    </details>
     {#if workspace}
       <button type="button" onclick={() => (confirmLayout = true)}>自動配置</button>
     {/if}

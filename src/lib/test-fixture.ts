@@ -1,82 +1,45 @@
+import { ConflictError, type Folder } from './folder'
 import { emptyDoc, newEntity } from './schema'
 export const NOW = '2026-11-05T14:30:00+09:00'
 export const id = (prefix: string, n: number) => `${prefix}_${String(n).padStart(16, '0')}`
-/**
- * In-memory stand-in for the shared tylan folder and the browser pickers
- * (tests cannot click native dialogs). Keys of `files` are paths like `working/network-2026.json`.
- * Self-contained so it can also be injected into a page with `.toString()`.
- */
-export function fakeTylanFolder(target: object = window) {
+/** In-memory stand-in for the tylan folder behind the launcher (same conflict rules as tylan.ps1). */
+export function memoryFolder() {
   const files = new Map<string, { text: string; lastModified: number }>()
-  const dirs = new Set(['', 'tools'])
-  const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name)
-  const missing = () => new DOMException('not found', 'NotFoundError')
-  const fileHandle = (path: string) => ({
-    kind: 'file',
-    name: path.split('/').at(-1),
-    async getFile() {
-      const f = files.get(path)!
-      return new File([f.text], path.split('/').at(-1)!, { lastModified: f.lastModified })
+  let clock = 1
+  const folder: Folder = {
+    async info() {
+      return { root: '\\\\fileserver\\tylan' }
     },
-    async createWritable() {
-      const parts: (string | Blob)[] = []
-      return {
-        async write(chunk: string | Blob) {
-          parts.push(chunk)
-        },
-        async close() {
-          const f = files.get(path)!
-          f.text = await new Blob(parts).text()
-          f.lastModified++
-        },
+    async list(dir) {
+      return [...files]
+        .filter(([p]) => p.startsWith(`${dir}/`) && !p.slice(dir.length + 1).includes('/'))
+        .map(([p, f]) => ({ name: p.slice(dir.length + 1), lastModified: String(f.lastModified) }))
+    },
+    async read(path) {
+      const f = files.get(path)
+      return f ? { text: f.text, lastModified: String(f.lastModified) } : null
+    },
+    async write(path, text, expect) {
+      const f = files.get(path)
+      if (expect === 'new' ? f : expect !== 'any' && String(f?.lastModified) !== expect) {
+        throw new ConflictError('changed elsewhere')
       }
+      files.set(path, { text, lastModified: ++clock })
+      return String(clock)
     },
-  })
-  const dirHandle = (path: string): object => ({
-    kind: 'directory',
-    name: path.split('/').at(-1) || 'tylan',
-    async getDirectoryHandle(name: string, options?: { create?: boolean }) {
-      const p = join(path, name)
-      if (!dirs.has(p)) {
-        if (!options?.create) {
-          throw missing()
-        }
-        dirs.add(p)
-      }
-      return dirHandle(p)
+    async copy(from, to) {
+      files.set(to, { text: files.get(from)!.text, lastModified: ++clock })
     },
-    async getFileHandle(name: string, options?: { create?: boolean }) {
-      const p = join(path, name)
-      if (!files.has(p)) {
-        if (!options?.create) {
-          throw missing()
-        }
-        files.set(p, { text: '', lastModified: 1 })
-      }
-      return fileHandle(p)
+    async ping() {},
+  }
+  return {
+    folder,
+    files,
+    /** Simulates another PC saving the file. */
+    touch(path: string) {
+      files.get(path)!.lastModified = ++clock
     },
-    async *values() {
-      for (const key of files.keys()) {
-        if (
-          key.startsWith(path ? `${path}/` : '') &&
-          !key.slice(path ? path.length + 1 : 0).includes('/')
-        ) {
-          yield fileHandle(key)
-        }
-      }
-    },
-  })
-  Object.assign(target, {
-    async showDirectoryPicker() {
-      return dirHandle('')
-    },
-    async showSaveFilePicker(options: { suggestedName: string }) {
-      const p = join('saved', options.suggestedName)
-      files.set(p, { text: '', lastModified: 1 })
-      return fileHandle(p)
-    },
-  })
-  return { files }
+  }
 }
 export function fixture() {
   const doc = emptyDoc(NOW, id('prj', 1))

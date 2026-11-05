@@ -34,12 +34,12 @@ Biome 2.6.5でSvelte・HTML全体の対応を有効にしています。この�
 bun run build
 ```
 
-1. `dist/editor.html` を共有フォルダの `tools/` に置き、Edgeで直接開きます。利用者側にNode.js・Bun・サーバーは不要です。
-2. 開始画面で「新しいJSONを作る」「前回のJSONをもとに作る」「既存のJSONを開く」のいずれかを選びます。保存先は `working/` です。
+1. `dist/` の `editor.html`・`tylan.cmd`・`tylan.ps1` を共有フォルダの `tools/` に置き、`tylan.cmd` をダブルクリックします。Windows標準のPowerShellが共有への保存を受け持ち、Edgeで編集画面が開きます。利用者側にNode.js・Bun・常駐サーバーは不要です。
+2. `working/` のJSONを一覧から開くか、今回の監査用JSONを作ります（前回分の引き継ぎ可）。JSONを開くまで編集はできません。
 3. 拠点・機器・配線・設定・監査を登録します。確定した変更は開いているJSONへ自動保存されます（Ctrl+Sで即時保存）。不明値は未確認のまま残せます。
-4. 「検証・書き出し」で公開範囲を設定してプレビューを確認し、「閲覧用HTMLを保存」で `published/` に保存します。
+4. 「検証・書き出し」で公開範囲を設定してプレビューを確認し、「閲覧用HTMLを公開」で `published/viewer.html` を更新します。旧版は自動で `archive/` へ移ります。
 
-保存の直前にファイルの更新日時を確認し、別の場所で変更されていれば自動保存を止めます。業務データをlocalStorage・IndexedDBへ保存しません。File System Access APIを使えないブラウザーでは、JSONの読込とダウンロードによる書き出しで動作します。
+保存の直前にファイルの更新日時を確認し、別の場所で変更されていれば自動保存を止めます。業務データをlocalStorage・IndexedDBへ保存しません。Edge単体では共有フォルダへ保存できないため（File System Access APIが拒否される）、`editor.html` を直接開いた場合は編集を始めず、`tylan.cmd` からの起動を案内します。起動用スクリプトはPCの中からの接続だけを受け付け、起動ごとの合言葉がない要求を拒否し、編集画面を閉じると数分で終了します。
 
 ビルドは `dist/SHA256SUMS.txt` と `dist/THIRD-PARTY-LICENSES.txt` も生成します。閲覧用雛形は `.build/viewer/` に置き、編集用HTMLへ内包します。
 
