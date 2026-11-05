@@ -1,0 +1,1421 @@
+{
+  "format": "tylan",
+  "schemaVersion": 1,
+  "project": {
+    "id": "prj_0000000000000001",
+    "name": "架空の本社LAN · 操作確認用",
+    "description": null,
+    "revision": 0,
+    "baseRevision": 0,
+    "appVersion": "0.1.0",
+    "createdAt": "2026-11-05T14:30:00+09:00",
+    "updatedAt": "2026-11-05T14:30:00+09:00",
+    "updatedBy": null,
+    "surveyDate": "2026-11-05"
+  },
+  "sites": [
+    {
+      "id": "sit_0000000000000001",
+      "name": "本社（サンプル）",
+      "contact": null,
+      "notes": null
+    }
+  ],
+  "locations": [
+    {
+      "id": "loc_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "name": "1F サーバーラック",
+      "floor": null,
+      "room": null,
+      "rack": null,
+      "contact": null,
+      "notes": null
+    }
+  ],
+  "devices": [
+    {
+      "id": "dev_0000000000000001",
+      "name": "IIJサービスアダプタ",
+      "assetNumber": null,
+      "kind": "serviceAdapter",
+      "manufacturer": null,
+      "model": null,
+      "serial": null,
+      "siteId": "sit_0000000000000001",
+      "locationId": "loc_0000000000000001",
+      "owner": null,
+      "administrator": null,
+      "supportContact": null,
+      "manageable": "unknown",
+      "approval": "approved",
+      "usage": "active",
+      "observation": "observed",
+      "lampStatus": null,
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "dev_0000000000000002",
+      "name": "コアスイッチ",
+      "assetNumber": null,
+      "kind": "switch",
+      "manufacturer": null,
+      "model": null,
+      "serial": null,
+      "siteId": "sit_0000000000000001",
+      "locationId": "loc_0000000000000001",
+      "owner": null,
+      "administrator": null,
+      "supportContact": null,
+      "manageable": "unknown",
+      "approval": "approved",
+      "usage": "active",
+      "observation": "observed",
+      "lampStatus": null,
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "dev_0000000000000003",
+      "name": "フロアスイッチ",
+      "assetNumber": null,
+      "kind": "switch",
+      "manufacturer": null,
+      "model": null,
+      "serial": null,
+      "siteId": "sit_0000000000000001",
+      "locationId": "loc_0000000000000001",
+      "owner": null,
+      "administrator": null,
+      "supportContact": null,
+      "manageable": "unknown",
+      "approval": "approved",
+      "usage": "active",
+      "observation": "observed",
+      "lampStatus": null,
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "dev_0000000000000004",
+      "name": "業務AP",
+      "assetNumber": null,
+      "kind": "ap",
+      "manufacturer": null,
+      "model": null,
+      "serial": null,
+      "siteId": "sit_0000000000000001",
+      "locationId": null,
+      "owner": null,
+      "administrator": null,
+      "supportContact": null,
+      "manageable": "unknown",
+      "approval": "approved",
+      "usage": "active",
+      "observation": "observed",
+      "lampStatus": null,
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "dev_0000000000000005",
+      "name": "ゲストAP",
+      "assetNumber": null,
+      "kind": "ap",
+      "manufacturer": null,
+      "model": null,
+      "serial": null,
+      "siteId": "sit_0000000000000001",
+      "locationId": null,
+      "owner": null,
+      "administrator": null,
+      "supportContact": null,
+      "manageable": "unknown",
+      "approval": "unknown",
+      "usage": "active",
+      "observation": "unknown",
+      "lampStatus": null,
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "dev_0000000000000006",
+      "name": "業務PC",
+      "assetNumber": null,
+      "kind": "pc",
+      "manufacturer": null,
+      "model": null,
+      "serial": null,
+      "siteId": "sit_0000000000000001",
+      "locationId": null,
+      "owner": null,
+      "administrator": null,
+      "supportContact": null,
+      "manageable": "unknown",
+      "approval": "approved",
+      "usage": "active",
+      "observation": "observed",
+      "lampStatus": null,
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "dev_0000000000000007",
+      "name": "共用プリンタ",
+      "assetNumber": null,
+      "kind": "printer",
+      "manufacturer": null,
+      "model": null,
+      "serial": null,
+      "siteId": "sit_0000000000000001",
+      "locationId": null,
+      "owner": null,
+      "administrator": null,
+      "supportContact": null,
+      "manageable": "unknown",
+      "approval": "approved",
+      "usage": "active",
+      "observation": "observed",
+      "lampStatus": null,
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "dev_0000000000000008",
+      "name": "NAS",
+      "assetNumber": null,
+      "kind": "nas",
+      "manufacturer": null,
+      "model": null,
+      "serial": null,
+      "siteId": "sit_0000000000000001",
+      "locationId": null,
+      "owner": null,
+      "administrator": null,
+      "supportContact": null,
+      "manageable": "unknown",
+      "approval": "approved",
+      "usage": "active",
+      "observation": "observed",
+      "lampStatus": null,
+      "lastCheckedDate": null,
+      "notes": null
+    }
+  ],
+  "ports": [
+    {
+      "id": "prt_0000000000000001",
+      "deviceId": "dev_0000000000000001",
+      "name": "LAN1",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000002",
+      "deviceId": "dev_0000000000000002",
+      "name": "LAN2",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000003",
+      "deviceId": "dev_0000000000000001",
+      "name": "LAN3",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000004",
+      "deviceId": "dev_0000000000000003",
+      "name": "LAN4",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000005",
+      "deviceId": "dev_0000000000000002",
+      "name": "LAN5",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000006",
+      "deviceId": "dev_0000000000000003",
+      "name": "LAN6",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000007",
+      "deviceId": "dev_0000000000000002",
+      "name": "LAN7",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000008",
+      "deviceId": "dev_0000000000000004",
+      "name": "LAN8",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000009",
+      "deviceId": "dev_0000000000000003",
+      "name": "LAN9",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000010",
+      "deviceId": "dev_0000000000000005",
+      "name": "LAN10",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000011",
+      "deviceId": "dev_0000000000000004",
+      "name": "LAN11",
+      "kind": null,
+      "medium": "wireless",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000012",
+      "deviceId": "dev_0000000000000006",
+      "name": "LAN12",
+      "kind": null,
+      "medium": "wireless",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000013",
+      "deviceId": "dev_0000000000000003",
+      "name": "LAN13",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000014",
+      "deviceId": "dev_0000000000000007",
+      "name": "LAN14",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000015",
+      "deviceId": "dev_0000000000000002",
+      "name": "LAN15",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000016",
+      "deviceId": "dev_0000000000000008",
+      "name": "LAN16",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000017",
+      "deviceId": "dev_0000000000000003",
+      "name": "LAN17",
+      "kind": null,
+      "medium": "copper",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "used",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": ["seg_0000000000000001"],
+      "observedAt": null
+    },
+    {
+      "id": "prt_0000000000000018",
+      "deviceId": "dev_0000000000000002",
+      "name": "用途不明ポート",
+      "kind": null,
+      "medium": "unknown",
+      "speedMbps": null,
+      "adminStatus": "unknown",
+      "status": "unknown",
+      "purpose": null,
+      "mac": null,
+      "segmentIds": [],
+      "observedAt": null
+    }
+  ],
+  "links": [
+    {
+      "id": "lnk_0000000000000001",
+      "a": {
+        "deviceId": "dev_0000000000000001",
+        "portId": "prt_0000000000000001"
+      },
+      "b": {
+        "deviceId": "dev_0000000000000002",
+        "portId": "prt_0000000000000002"
+      },
+      "kind": "physical",
+      "cableId": null,
+      "speedMbps": 1000,
+      "segmentIds": [],
+      "certainty": "confirmed",
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "lnk_0000000000000002",
+      "a": {
+        "deviceId": "dev_0000000000000001",
+        "portId": "prt_0000000000000003"
+      },
+      "b": {
+        "deviceId": "dev_0000000000000003",
+        "portId": "prt_0000000000000004"
+      },
+      "kind": "physical",
+      "cableId": null,
+      "speedMbps": 1000,
+      "segmentIds": [],
+      "certainty": "confirmed",
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "lnk_0000000000000003",
+      "a": {
+        "deviceId": "dev_0000000000000002",
+        "portId": "prt_0000000000000005"
+      },
+      "b": {
+        "deviceId": "dev_0000000000000003",
+        "portId": "prt_0000000000000006"
+      },
+      "kind": "physical",
+      "cableId": null,
+      "speedMbps": 1000,
+      "segmentIds": [],
+      "certainty": "confirmed",
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "lnk_0000000000000004",
+      "a": {
+        "deviceId": "dev_0000000000000002",
+        "portId": "prt_0000000000000007"
+      },
+      "b": {
+        "deviceId": "dev_0000000000000004",
+        "portId": "prt_0000000000000008"
+      },
+      "kind": "physical",
+      "cableId": null,
+      "speedMbps": 1000,
+      "segmentIds": [],
+      "certainty": "confirmed",
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "lnk_0000000000000005",
+      "a": {
+        "deviceId": "dev_0000000000000003",
+        "portId": "prt_0000000000000009"
+      },
+      "b": {
+        "deviceId": "dev_0000000000000005",
+        "portId": "prt_0000000000000010"
+      },
+      "kind": "physical",
+      "cableId": null,
+      "speedMbps": 1000,
+      "segmentIds": [],
+      "certainty": "confirmed",
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "lnk_0000000000000006",
+      "a": {
+        "deviceId": "dev_0000000000000004",
+        "portId": "prt_0000000000000011"
+      },
+      "b": {
+        "deviceId": "dev_0000000000000006",
+        "portId": "prt_0000000000000012"
+      },
+      "kind": "wireless",
+      "cableId": null,
+      "speedMbps": 1000,
+      "segmentIds": [],
+      "certainty": "confirmed",
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "lnk_0000000000000007",
+      "a": {
+        "deviceId": "dev_0000000000000003",
+        "portId": "prt_0000000000000013"
+      },
+      "b": {
+        "deviceId": "dev_0000000000000007",
+        "portId": "prt_0000000000000014"
+      },
+      "kind": "physical",
+      "cableId": null,
+      "speedMbps": 1000,
+      "segmentIds": [],
+      "certainty": "confirmed",
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "lnk_0000000000000008",
+      "a": {
+        "deviceId": "dev_0000000000000002",
+        "portId": "prt_0000000000000015"
+      },
+      "b": {
+        "deviceId": "dev_0000000000000008",
+        "portId": "prt_0000000000000016"
+      },
+      "kind": "physical",
+      "cableId": null,
+      "speedMbps": 1000,
+      "segmentIds": [],
+      "certainty": "confirmed",
+      "lastCheckedDate": null,
+      "notes": null
+    },
+    {
+      "id": "lnk_0000000000000009",
+      "a": {
+        "deviceId": "dev_0000000000000003",
+        "portId": "prt_0000000000000017"
+      },
+      "b": {
+        "unknown": "天井裏の接続先未確認"
+      },
+      "kind": "physical",
+      "cableId": null,
+      "speedMbps": 1000,
+      "segmentIds": [],
+      "certainty": "estimated",
+      "lastCheckedDate": null,
+      "notes": null
+    }
+  ],
+  "segments": [
+    {
+      "id": "seg_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "name": "業務LAN",
+      "cidr": "192.168.10.0/24",
+      "vlanId": 10,
+      "gateway": "192.168.10.1",
+      "dns": ["192.168.10.2"],
+      "purpose": null
+    }
+  ],
+  "ipAssignments": [
+    {
+      "id": "ip_0000000000000001",
+      "portId": "prt_0000000000000001",
+      "segmentId": "seg_0000000000000001",
+      "address": "192.168.10.1",
+      "prefixLength": 24,
+      "mode": "static",
+      "observation": "observed"
+    },
+    {
+      "id": "ip_0000000000000002",
+      "portId": "prt_0000000000000002",
+      "segmentId": "seg_0000000000000001",
+      "address": "192.168.10.101",
+      "prefixLength": 24,
+      "mode": "static",
+      "observation": "observed"
+    },
+    {
+      "id": "ip_0000000000000003",
+      "portId": "prt_0000000000000004",
+      "segmentId": "seg_0000000000000001",
+      "address": "192.168.10.102",
+      "prefixLength": 24,
+      "mode": "static",
+      "observation": "observed"
+    },
+    {
+      "id": "ip_0000000000000004",
+      "portId": "prt_0000000000000008",
+      "segmentId": "seg_0000000000000001",
+      "address": "192.168.10.103",
+      "prefixLength": 24,
+      "mode": "static",
+      "observation": "observed"
+    },
+    {
+      "id": "ip_0000000000000005",
+      "portId": "prt_0000000000000010",
+      "segmentId": "seg_0000000000000001",
+      "address": "192.168.10.104",
+      "prefixLength": 24,
+      "mode": "static",
+      "observation": "observed"
+    },
+    {
+      "id": "ip_0000000000000006",
+      "portId": "prt_0000000000000012",
+      "segmentId": "seg_0000000000000001",
+      "address": "192.168.10.105",
+      "prefixLength": 24,
+      "mode": "static",
+      "observation": "observed"
+    },
+    {
+      "id": "ip_0000000000000007",
+      "portId": "prt_0000000000000014",
+      "segmentId": "seg_0000000000000001",
+      "address": "192.168.10.106",
+      "prefixLength": 24,
+      "mode": "static",
+      "observation": "observed"
+    },
+    {
+      "id": "ip_0000000000000008",
+      "portId": "prt_0000000000000016",
+      "segmentId": "seg_0000000000000001",
+      "address": "192.168.10.107",
+      "prefixLength": 24,
+      "mode": "static",
+      "observation": "observed"
+    }
+  ],
+  "dhcpScopes": [
+    {
+      "id": "dhc_0000000000000001",
+      "segmentId": "seg_0000000000000001",
+      "serverDeviceId": "dev_0000000000000001",
+      "serverUnknown": null,
+      "ranges": [
+        {
+          "start": "192.168.10.100",
+          "end": "192.168.10.200"
+        }
+      ],
+      "exclusions": [],
+      "reservations": [],
+      "lease": {
+        "value": 24,
+        "unit": "hours"
+      },
+      "dns": [],
+      "gateway": null,
+      "approval": "approved"
+    }
+  ],
+  "wirelessNetworks": [
+    {
+      "id": "wln_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "ssid": "SAMPLE-BUSINESS",
+      "purpose": null,
+      "apDeviceIds": ["dev_0000000000000004"],
+      "segmentIds": ["seg_0000000000000001"],
+      "authentication": "wpa3",
+      "passwordManagement": "managed",
+      "guestIsolation": "enabled",
+      "isolationFinding": null,
+      "radioFinding": null
+    }
+  ],
+  "auditTemplate": {
+    "version": "2026-11",
+    "items": [
+      {
+        "no": 1,
+        "category": "機器・設置",
+        "title": "サービスアダプタ",
+        "content": "IIJサービスアダプタの設置場所、型番、シリアル番号、ランプ状態を確認",
+        "method": "現物・ラベルを確認"
+      },
+      {
+        "no": 2,
+        "category": "機器・設置",
+        "title": "スイッチ",
+        "content": "L2スイッチのメーカー、型番、台数、設置場所、管理可否を確認",
+        "method": "現物・管理画面を確認"
+      },
+      {
+        "no": 3,
+        "category": "機器・設置",
+        "title": "無線AP",
+        "content": "無線AP・中継器の台数、型番、設置場所を確認",
+        "method": "現物と設置場所を確認"
+      },
+      {
+        "no": 4,
+        "category": "機器・設置",
+        "title": "非承認機器",
+        "content": "私物ルーター、ハブ、無断AP、テザリング機器の常設がないか",
+        "method": "現場担当者へ聞き取り・目視"
+      },
+      {
+        "no": 5,
+        "category": "機器・設置",
+        "title": "旧設備",
+        "content": "旧NEC機器・旧AP・使われないハブなどの接続、残置を確認",
+        "method": "現物・接続を確認"
+      },
+      {
+        "no": 6,
+        "category": "機器・設置",
+        "title": "機器管理",
+        "content": "設置機器の所有者、管理担当者、保守窓口を確認",
+        "method": "担当者へ聞き取り"
+      },
+      {
+        "no": 7,
+        "category": "配線・物理構成",
+        "title": "接続構成",
+        "content": "サービスアダプタ→スイッチ→AP・端末等の接続関係を記録",
+        "method": "ケーブルを追跡し構成図を起こす"
+      },
+      {
+        "no": 8,
+        "category": "配線・物理構成",
+        "title": "ポート",
+        "content": "スイッチの使用ポート、空きポート、用途不明ポートを確認",
+        "method": "ポート番号と接続先を記録"
+      },
+      {
+        "no": 12,
+        "category": "IP・DHCP・DNS",
+        "title": "アドレス設計",
+        "content": "拠点LANのIPアドレス帯、サブネット、デフォルトGWを把握",
+        "method": "管理設定・代表端末で確認"
+      },
+      {
+        "no": 13,
+        "category": "IP・DHCP・DNS",
+        "title": "DHCP",
+        "content": "DHCPの配布元、配布範囲、除外範囲、リース設定を確認",
+        "method": "ルーター設定・代表端末で確認"
+      },
+      {
+        "no": 14,
+        "category": "IP・DHCP・DNS",
+        "title": "不審なDHCP",
+        "content": "管理外のDHCPサーバ、二重配布の兆候がないか",
+        "method": "管理画面・現場聞き取りで確認"
+      },
+      {
+        "no": 15,
+        "category": "IP・DHCP・DNS",
+        "title": "固定IP",
+        "content": "プリンタ・NAS等の固定IP一覧と実機の設定を突き合わせる",
+        "method": "機器設定と台帳を確認"
+      },
+      {
+        "no": 16,
+        "category": "IP・DHCP・DNS",
+        "title": "IP異常",
+        "content": "IP重複、169.254.x.x、用途不明IPの発生がないか",
+        "method": "現場聞き取り・代表端末を確認"
+      },
+      {
+        "no": 17,
+        "category": "IP・DHCP・DNS",
+        "title": "DNS",
+        "content": "端末が想定する社内AD/DNSを使用しているか",
+        "method": "代表端末・DHCP設定を確認"
+      },
+      {
+        "no": 18,
+        "category": "無線LAN",
+        "title": "SSID",
+        "content": "業務用・ゲスト用・用途不明SSIDの有無と利用目的を確認",
+        "method": "AP設定・現地確認"
+      },
+      {
+        "no": 19,
+        "category": "無線LAN",
+        "title": "認証・暗号化",
+        "content": "WPA2-AES/WPA3等の方式、共通パスワードの管理を確認",
+        "method": "AP管理画面で確認（秘密そのものは記録しない）"
+      },
+      {
+        "no": 20,
+        "category": "無線LAN",
+        "title": "接続分離",
+        "content": "ゲストWi-Fiから社内LANへのアクセス制限を確認",
+        "method": "設定・許可範囲を確認"
+      },
+      {
+        "no": 21,
+        "category": "無線LAN",
+        "title": "電波状況",
+        "content": "接続しづらい場所、APの過密・死角、電波不安定箇所を確認",
+        "method": "現場で実測・利用者聞き取り"
+      },
+      {
+        "no": 22,
+        "category": "接続機器・資産",
+        "title": "接続機器一覧",
+        "content": "PC、プリンタ、NAS、カメラ、勤怠機器、IoT機器を把握",
+        "method": "現物・DHCP一覧・台帳を照合"
+      },
+      {
+        "no": 23,
+        "category": "接続機器・資産",
+        "title": "未使用機器",
+        "content": "長期間未使用の端末、ネットワーク接続したままの不要機器がないか",
+        "method": "現物・担当者へ聞き取り"
+      }
+    ]
+  },
+  "auditRounds": [
+    {
+      "id": "rnd_0000000000000001",
+      "name": "2026年度 初回調査",
+      "siteIds": ["sit_0000000000000001"],
+      "startDate": "2026-11-05",
+      "endDate": null,
+      "surveyor": null
+    }
+  ],
+  "auditResults": [
+    {
+      "id": "aud_0000000000000001",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 1,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000002",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 2,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000003",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 3,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000004",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 4,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000005",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 5,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000006",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 6,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000007",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 7,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000008",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 8,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000009",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 12,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000010",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 13,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000011",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 14,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000012",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 15,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000013",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 16,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000014",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 17,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000015",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 18,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000016",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 19,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000017",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 20,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000018",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 21,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000019",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 22,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000020",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 23,
+      "scope": "summary",
+      "targetRef": null,
+      "judgment": "unchecked",
+      "finding": null,
+      "problem": null,
+      "checkedBy": null,
+      "checkedDate": null,
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": [],
+      "actionItemIds": []
+    },
+    {
+      "id": "aud_0000000000000099",
+      "roundId": "rnd_0000000000000001",
+      "siteId": "sit_0000000000000001",
+      "itemNo": 4,
+      "scope": "target",
+      "targetRef": {
+        "type": "device",
+        "id": "dev_0000000000000005"
+      },
+      "judgment": "ng",
+      "finding": "管理担当への確認が必要",
+      "problem": "承認記録が見つからない",
+      "checkedBy": "サンプル調査者",
+      "checkedDate": "2026-11-05",
+      "attempted": false,
+      "reason": null,
+      "nextCheck": null,
+      "method": null,
+      "recheckDate": null,
+      "evidenceIds": ["evd_0000000000000001"],
+      "actionItemIds": ["act_0000000000000001"]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "evd_0000000000000001",
+      "description": "配線調査票（架空）",
+      "referenceNumber": "SAMPLE-001",
+      "storageLocation": "社内管理場所を文字列で記録",
+      "acquiredDate": null,
+      "acquiredBy": null
+    }
+  ],
+  "actionItems": [
+    {
+      "id": "act_0000000000000001",
+      "auditResultIds": ["aud_0000000000000099"],
+      "targetRef": {
+        "type": "device",
+        "id": "dev_0000000000000005"
+      },
+      "content": "ゲストAPの承認状態を確認する",
+      "priority": "high",
+      "assignee": null,
+      "dueDate": null,
+      "progress": "todo",
+      "completionRecord": null,
+      "recheckRecord": null
+    }
+  ],
+  "layouts": [
+    {
+      "id": "lay_0000000000000001",
+      "name": "本社ネットワーク構成図",
+      "siteId": "sit_0000000000000001",
+      "deviceIds": [],
+      "linkIds": [],
+      "positions": {
+        "dev_0000000000000001": {
+          "x": 80,
+          "y": 100,
+          "pinned": false
+        },
+        "dev_0000000000000002": {
+          "x": 380,
+          "y": 100,
+          "pinned": false
+        },
+        "dev_0000000000000003": {
+          "x": 380,
+          "y": 280,
+          "pinned": false
+        },
+        "dev_0000000000000004": {
+          "x": 680,
+          "y": 100,
+          "pinned": false
+        },
+        "dev_0000000000000008": {
+          "x": 680,
+          "y": 280,
+          "pinned": false
+        },
+        "dev_0000000000000005": {
+          "x": 680,
+          "y": 460,
+          "pinned": false
+        },
+        "dev_0000000000000007": {
+          "x": 680,
+          "y": 640,
+          "pinned": false
+        },
+        "dev_0000000000000006": {
+          "x": 980,
+          "y": 100,
+          "pinned": false
+        },
+        "unknown:lnk_0000000000000009:b": {
+          "x": 680,
+          "y": 820,
+          "pinned": false
+        }
+      },
+      "hidden": [],
+      "groupByLocation": true,
+      "viewport": {
+        "x": 0,
+        "y": 0,
+        "zoom": 1
+      }
+    }
+  ],
+  "publishSettings": {
+    "siteIds": ["sit_0000000000000001"],
+    "fields": {}
+  }
+}

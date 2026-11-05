@@ -1,0 +1,10 @@
+{
+  "[typescript][javascript][json][jsonc][css][html][svelte]": {
+    "editor.defaultFormatter": "biomejs.biome",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.biome": "explicit",
+      "source.organizeImports.biome": "explicit"
+    }
+  }
+}
