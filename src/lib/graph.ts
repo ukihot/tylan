@@ -36,6 +36,21 @@ export type DeviceData = {
   hiddenConnections: number
   pinned: boolean
 }
+export function groupBy<T>(items: T[], key: (item: T) => string | undefined) {
+  const groups = new Map<string, T[]>()
+  for (const item of items) {
+    const k = key(item)
+    if (k !== undefined) {
+      const list = groups.get(k)
+      if (list) {
+        list.push(item)
+      } else {
+        groups.set(k, [item])
+      }
+    }
+  }
+  return groups
+}
 export function toGraph(doc: GraphDoc, siteId: string, options: GraphOptions = {}) {
   const layout =
     doc.layouts.find((l) => l.id === options.layoutId && l.siteId === siteId) ??
@@ -55,34 +70,33 @@ export function toGraph(doc: GraphDoc, siteId: string, options: GraphOptions = {
       [l.a, l.b].some((ep) => 'deviceId' in ep && ids.has(ep.deviceId)),
   )
   const results = doc.auditResults.filter((r) => !options.roundId || r.roundId === options.roundId)
-  const ips = (deviceId: string) =>
-    doc.ipAssignments
-      .filter((a) => doc.ports.some((p) => p.id === a.portId && p.deviceId === deviceId))
-      .map((a) => a.address)
-      .filter(Boolean)
-      .join(' / ')
-  const badges = new Map(
-    siteDevices.map((d) => [
-      d.id,
-      auditBadge(
-        results.filter(
-          (r) =>
-            (r.targetRef?.type === 'device' && r.targetRef.id === d.id) ||
-            (r.targetRef?.type === 'port' &&
-              doc.ports.some((p) => p.id === r.targetRef?.id && p.deviceId === d.id)),
-        ),
-      ),
-    ]),
+  // Index once: per-device scans over all ports × IPs took ~20s at 300 nodes.
+  const portsById = new Map(doc.ports.map((p) => [p.id, p]))
+  const portsByDevice = groupBy(doc.ports, (p) => p.deviceId)
+  const ipsByDevice = groupBy(
+    doc.ipAssignments.filter((a) => a.address),
+    (a) => portsById.get(a.portId)?.deviceId,
   )
+  const ipText = new Map(
+    siteDevices.map((d) => [d.id, (ipsByDevice.get(d.id) ?? []).map((a) => a.address).join(' / ')]),
+  )
+  const ips = (deviceId: string) => ipText.get(deviceId) ?? ''
+  const resultsByDevice = groupBy(results, (r) =>
+    r.targetRef?.type === 'device'
+      ? r.targetRef.id
+      : r.targetRef?.type === 'port'
+        ? portsById.get(r.targetRef.id)?.deviceId
+        : undefined,
+  )
+  const badges = new Map(
+    siteDevices.map((d) => [d.id, auditBadge(resultsByDevice.get(d.id) ?? [])]),
+  )
+  const deviceById = new Map(doc.devices.map((d) => [d.id, d]))
+  const locationName = new Map(doc.locations.map((l) => [l.id, l.name]))
   const matched = new Set(
     siteDevices
       .filter((d) => {
-        const search = [
-          d.name,
-          d.model,
-          ips(d.id),
-          doc.locations.find((l) => l.id === d.locationId)?.name,
-        ]
+        const search = [d.name, d.model, ips(d.id), locationName.get(d.locationId ?? '')]
           .join(' ')
           .toLowerCase()
         return (
@@ -91,8 +105,8 @@ export function toGraph(doc: GraphDoc, siteId: string, options: GraphOptions = {
           (!options.locationId || d.locationId === options.locationId) &&
           (!options.observation || d.observation === options.observation) &&
           (!options.segmentId ||
-            doc.ports.some(
-              (p) => p.deviceId === d.id && p.segmentIds?.includes(options.segmentId!),
+            (portsByDevice.get(d.id) ?? []).some((p) =>
+              p.segmentIds?.includes(options.segmentId!),
             )) &&
           (!options.wirelessId ||
             doc.wirelessNetworks?.some(
@@ -141,12 +155,10 @@ export function toGraph(doc: GraphDoc, siteId: string, options: GraphOptions = {
         label: d.name,
         kind: d.kind,
         ip: ips(d.id) || 'IP未確認',
-        location: doc.locations.find((l) => l.id === d.locationId)?.name ?? '設置場所未確認',
+        location: locationName.get(d.locationId ?? '') ?? '設置場所未確認',
         observation: d.observation,
         badge: badges.get(d.id)!,
-        ports: doc.ports
-          .filter((p) => p.deviceId === d.id)
-          .map((p) => ({ id: p.id, name: p.name })),
+        ports: (portsByDevice.get(d.id) ?? []).map((p) => ({ id: p.id, name: p.name })),
         hiddenConnections,
         pinned: p.pinned,
       },
@@ -196,15 +208,13 @@ export function toGraph(doc: GraphDoc, siteId: string, options: GraphOptions = {
     const uncertain = l.certainty !== 'confirmed' || 'unknown' in l.a || 'unknown' in l.b
     const portName = (side: 'a' | 'b') => {
       const ep = l[side]
-      return 'deviceId' in ep
-        ? (doc.ports.find((p) => p.id === ep.portId)?.name ?? 'ポート未確認')
-        : '不明'
+      return 'deviceId' in ep ? (portsById.get(ep.portId ?? '')?.name ?? 'ポート未確認') : '不明'
     }
     const badge = auditBadge(
       results.filter((r) => r.targetRef?.type === 'link' && r.targetRef.id === l.id),
     )
     const aPortId = 'deviceId' in l.a ? l.a.portId : null
-    const aPort = doc.ports.find((p) => p.id === aPortId)
+    const aPort = portsById.get(aPortId ?? '')
     const media = { copper: '銅線', fiber: '光', wireless: '無線', unknown: '媒体不明' }
     const networkLabel = l.segmentIds
       ?.map((id) => doc.segments?.find((s) => s.id === id)?.vlanId ?? '?')
@@ -258,9 +268,7 @@ export function toGraph(doc: GraphDoc, siteId: string, options: GraphOptions = {
     }
     if (layout?.groupByLocation !== false) {
       for (const location of doc.locations.filter((l) => l.siteId === siteId)) {
-        const children = nodes.filter((n) =>
-          doc.devices.some((d) => d.id === n.id && d.locationId === location.id),
-        )
+        const children = nodes.filter((n) => deviceById.get(n.id)?.locationId === location.id)
         if (children.length) {
           groups.push(makeGroup(`group:${location.id}`, location.name, children))
         }

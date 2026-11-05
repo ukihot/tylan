@@ -1,5 +1,5 @@
 import { type Collection, type Doc, type EntityMap, newEntity } from './schema'
-import { findReferences, type ValidationResult, validate } from './validate'
+import { findReferences, type Reference, type ValidationResult, validate } from './validate'
 
 export type ChangeResult = ({ ok: true; doc: Doc } | { ok: false }) & ValidationResult
 export function applyChange(doc: Doc, mutate: (draft: Doc) => void): ChangeResult {
@@ -41,6 +41,14 @@ export function upsert<K extends Collection>(
     }
   })
 }
+// Saved coordinates and "hidden from diagram" flags are display state, not relationships:
+// they are removed together with the entity instead of blocking deletion.
+const isPlacement = (r: Reference) => /^layouts\.\d+\.(positions|hidden)$/.test(r.path)
+const placementKey = (entityId: string) => (key: string) =>
+  key === entityId || key.startsWith(`unknown:${entityId}:`)
+export function placementCount(doc: Doc, entityId: string) {
+  return findReferences(doc, entityId).filter(isPlacement).length
+}
 export function removalReferences(doc: Doc, collection: Collection, entityId: string) {
   const owned =
     collection === 'devices'
@@ -49,6 +57,7 @@ export function removalReferences(doc: Doc, collection: Collection, entityId: st
   return [entityId, ...owned]
     .flatMap((id) => findReferences(doc, id))
     .filter((r) => !(r.id === entityId && r.entityId && owned.includes(r.entityId)))
+    .filter((r) => !isPlacement(r))
 }
 export function removeEntity(doc: Doc, collection: Collection, entityId: string): ChangeResult {
   if (!doc[collection].some((entity) => entity.id === entityId)) {
@@ -81,6 +90,13 @@ export function removeEntity(doc: Doc, collection: Collection, entityId: string)
     )
     if (collection === 'devices') {
       draft.ports = draft.ports.filter((p) => p.deviceId !== entityId)
+    }
+    const placed = placementKey(entityId)
+    for (const layout of draft.layouts) {
+      layout.positions = Object.fromEntries(
+        Object.entries(layout.positions).filter(([key]) => !placed(key)),
+      )
+      layout.hidden = layout.hidden.filter((key) => !placed(key))
     }
   })
 }

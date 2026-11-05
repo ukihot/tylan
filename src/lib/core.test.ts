@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { AUDIT_MASTER, auditBadge, auditSummary } from './audit-master'
 import { applyChange, removeEntity, startRound } from './commands'
-import { toCsv } from './csv'
+import { documentCsv, toCsv } from './csv'
 import { toGraph } from './graph'
 import { parseDocument, prepareExport } from './io'
 import { autoLayout } from './layout'
@@ -91,6 +91,19 @@ describe('FCISの更新と監査', () => {
     doc.layouts = []
     const result = removeEntity(doc, 'devices', id('dev', 1))
     expect(result.ok && result.doc.ports.some((p) => p.deviceId === id('dev', 1))).toBe(false)
+  })
+  test('図の座標・非表示設定は削除を止めず、一緒に消える', () => {
+    const doc = fixture()
+    doc.links = []
+    doc.ipAssignments = []
+    doc.dhcpScopes = []
+    doc.layouts[0]!.positions = autoLayout(doc, id('sit', 1), doc.layouts[0])
+    doc.layouts[0]!.hidden = [id('dev', 2)]
+    const result = removeEntity(doc, 'devices', id('dev', 2))
+    expect(result.ok).toBe(true)
+    const layout = result.ok ? result.doc.layouts[0]! : null
+    expect(Object.keys(layout?.positions ?? {})).toEqual([id('dev', 1)])
+    expect(layout?.hidden).toEqual([])
   })
   test('20項目の元番号を維持し、新回次は未確認で開始する', () => {
     expect(AUDIT_MASTER.map((i) => i.no)).toEqual([
@@ -205,6 +218,28 @@ describe('入出力と公開', () => {
 })
 
 describe('構成図', () => {
+  test('NFR-02規模（1拠点300機器・ポート1,200）で図とCSVが1秒以内', () => {
+    const doc = fixture()
+    doc.links = []
+    for (let i = 3; i <= 300; i++) {
+      doc.devices.push({ ...doc.devices[1]!, id: id('dev', i), name: `機器${i}`, kind: 'pc' })
+      for (let p = 0; p < 4; p++) {
+        doc.ports.push({ ...doc.ports[1]!, id: id('prt', i * 10 + p), deviceId: id('dev', i) })
+      }
+      doc.ipAssignments.push({
+        ...doc.ipAssignments[0]!,
+        id: id('ip', i),
+        portId: id('prt', i * 10),
+        address: `192.168.1.${(i % 250) + 1}`,
+        mode: 'dhcp',
+      })
+    }
+    const start = performance.now()
+    const graph = toGraph(doc, id('sit', 1), { query: '機器1' })
+    documentCsv(doc, 'assets')
+    expect(graph.matchedCount).toBeGreaterThan(0)
+    expect(performance.now() - start).toBeLessThan(1000)
+  })
   test('不明端点を資産にせず、未確認接続を破線・?で表示する', () => {
     const doc = fixture()
     doc.links[0]!.b = { unknown: '天井裏' }

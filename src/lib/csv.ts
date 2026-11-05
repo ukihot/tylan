@@ -1,4 +1,5 @@
 import { judgmentLabels } from './audit-master'
+import { groupBy } from './graph'
 import type { Doc } from './schema'
 import { validate } from './validate'
 export function toCsv(rows: unknown[][]) {
@@ -27,6 +28,9 @@ export function documentCsv(doc: Doc, kind: 'assets' | 'ports' | 'audit' | 'acti
   const deviceName = (id: string) => doc.devices.find((d) => d.id === id)?.name ?? id
   const siteName = (id: string) => doc.sites.find((d) => d.id === id)?.name ?? id
   if (kind === 'assets') {
+    const portOwner = new Map(doc.ports.map((p) => [p.id, p.deviceId]))
+    const ipsByDevice = groupBy(doc.ipAssignments, (a) => portOwner.get(a.portId))
+    const locationName = new Map(doc.locations.map((l) => [l.id, l.name]))
     return toCsv([
       [
         'ID',
@@ -56,11 +60,8 @@ export function documentCsv(doc: Doc, kind: 'assets' | 'ports' | 'audit' | 'acti
         d.model,
         d.serial,
         siteName(d.siteId),
-        doc.locations.find((l) => l.id === d.locationId)?.name,
-        doc.ipAssignments
-          .filter((a) => doc.ports.some((p) => p.id === a.portId && p.deviceId === d.id))
-          .map((a) => a.address)
-          .join(' / '),
+        locationName.get(d.locationId ?? ''),
+        (ipsByDevice.get(d.id) ?? []).map((a) => a.address).join(' / '),
         d.owner,
         d.administrator,
         d.supportContact,

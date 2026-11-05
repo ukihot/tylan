@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { removalReferences } from '../lib/commands'
+  import { placementCount, removalReferences } from '../lib/commands'
   import { createId } from '../lib/platform'
   import { collectionLabels, draftFor, entityTitle, labels, valueLabels } from '../lib/presentation'
   import { entityHref } from '../lib/routes'
@@ -336,6 +336,9 @@
             <p>
               「{entityTitle(current, doc)}」を削除します。{collection === 'devices'
                 ? `未参照の配下ポート${doc.ports.filter((p) => p.deviceId === current.id).length}件も削除します。`
+                : ''}
+              {placementCount(doc, current.id)
+                ? `図の配置・非表示設定${placementCount(doc, current.id)}件も削除します。`
                 : ''}
             </p>
             <button
