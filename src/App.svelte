@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte'
+  import AuditPanel from './components/AuditPanel.svelte'
   import EntityScreen from './components/EntityScreen.svelte'
   import ExportPanel from './components/ExportPanel.svelte'
   import FieldEditor from './components/FieldEditor.svelte'
@@ -170,7 +171,7 @@
         {/if}
         <button
           type="button"
-          disabled={!workspace.undoCount || editing}
+          disabled={!workspace.undoCount || editing || files?.auditBusy}
           onclick={() => workspace.undo()}
         >
           取り消す
@@ -382,6 +383,9 @@
       {:else if screen === 'export'}
         <ExportPanel {workspace} {files} />
       {:else if choices.length}
+        {#if screen === 'audit' && files && folder}
+          <AuditPanel {workspace} {files} {folder} />
+        {/if}
         <div class="subtabs" role="tablist" aria-label="データの種類">
           {#each choices as c}
             <button

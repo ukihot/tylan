@@ -15,10 +15,11 @@
     "test:unit": "vitest run --project unit",
     "test:browser": "vitest run --project browser",
     "test:release": "vitest run --config vitest.release.config.ts",
+    "test:collector": "bun scripts/test-collector.ts",
     "format": "biome format --write .",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "verify": "bun run lint && bun run check && bun run test && bun run build && bun run test:release"
+    "verify": "bun run lint && bun run check && bun run test && bun run test:collector && bun run build && bun run test:release"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.5",

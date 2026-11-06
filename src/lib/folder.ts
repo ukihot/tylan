@@ -2,7 +2,8 @@
 // Edge cannot write to SMB shares through the File System Access API, so that local helper does the I/O.
 export type Entry = { name: string; lastModified: string }
 export type Folder = {
-  info(): Promise<{ root: string }>
+  info(): Promise<{ root: string; audit?: { available: boolean } }>
+  audit?(method: string, path: string, body?: unknown): Promise<unknown>
   /** dir: working | working/csv | published | archive */
   list(dir: string): Promise<Entry[]>
   read(path: string): Promise<{ text: string; lastModified: string } | null>
@@ -48,6 +49,19 @@ export function launcherFolder(): Folder | null {
     return res
   }
   return {
+    async audit(method, path, body) {
+      const [route, query = ''] = path.split('?')
+      const res = await call(
+        method,
+        route!,
+        Object.fromEntries(new URLSearchParams(query)),
+        body === undefined ? undefined : JSON.stringify(body),
+      )
+      if (!res.ok) {
+        throw new Error(`監査操作に失敗しました（${res.status}：${await res.text()}）`)
+      }
+      return res.json()
+    },
     async info() {
       return (await call('GET', 'info', {})).json()
     },

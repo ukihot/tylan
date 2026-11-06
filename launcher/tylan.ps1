@@ -6,7 +6,9 @@
 param(
   [string]$Root = '',
   [switch]$NoBrowser,
-  [int]$IdleMinutes = 3
+  [int]$IdleMinutes = 3,
+  [string]$CollectorRoot = '',
+  [string]$AuditFixture = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
@@ -50,9 +52,13 @@ function Reply([int]$status, [string]$type, [byte[]]$bytes, $headers = @{}) {
   @{ Status = $status; Type = $type; Bytes = $bytes; Headers = $headers }
 }
 function Json($value) {
-  Reply 200 'application/json; charset=utf-8' $utf8.GetBytes((ConvertTo-Json -InputObject $value -Depth 4 -Compress))
+  Reply 200 'application/json; charset=utf-8' $utf8.GetBytes((ConvertTo-Json -InputObject $value -Depth 64 -Compress))
 }
-function Stamp([string]$path) { [System.IO.File]::GetLastWriteTimeUtc($path).Ticks.ToString() }
+function SHA([byte[]]$bytes) {
+  $hash = [System.Security.Cryptography.SHA256]::Create()
+  try { -join ($hash.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) } finally { $hash.Dispose() }
+}
+function Stamp([string]$path) { [System.IO.File]::GetLastWriteTimeUtc($path).Ticks.ToString() + ':' + (SHA ([System.IO.File]::ReadAllBytes($path))) }
 function Resolve-Target($rel) {
   $rel = [string]$rel
   $i = $rel.LastIndexOf('/')
@@ -65,23 +71,52 @@ function Resolve-Target($rel) {
   }
   if ($exts -notcontains [System.IO.Path]::GetExtension($name).ToLowerInvariant()) { Fail 400 "file type not allowed: $name" }
   $folder = Join-Path $Root $dirs[$dir]
-  @{ Folder = $folder; Path = (Join-Path $folder $name) }
+  if (Test-Path -LiteralPath $folder) {
+    if ((Get-Item -LiteralPath $folder).Attributes -band [System.IO.FileAttributes]::ReparsePoint) { Fail 400 'reparse folder prohibited' }
+  }
+  $resolved = Join-Path $folder $name
+  if ((Test-Path -LiteralPath $resolved) -and ((Get-Item -LiteralPath $resolved).Attributes -band [System.IO.FileAttributes]::ReparsePoint)) { Fail 400 'reparse file prohibited' }
+  @{ Folder = $folder; Path = $resolved }
 }
-function Write-Atomic($target, [byte[]]$bytes) {
+function Save-Canonical($target, [byte[]]$bytes, [string]$expect, [bool]$importing = $false) {
+  $exists = [System.IO.File]::Exists($target.Path)
+  $before = if ($exists) { Stamp $target.Path } else { 'new' }
+  if (($expect -eq 'new' -and $exists) -or ($expect -notin @('new', 'any') -and $expect -ne $before)) { Fail 409 'changed elsewhere' }
+  if ([System.IO.Path]::GetExtension($target.Path) -eq '.json' -and $target.Folder -eq (Join-Path $Root 'working')) {
+    if ($bytes.Length -gt 10MB) { Fail 413 'canonical JSON exceeds 10MiB' }
+    $candidate = ConvertFrom-Json $utf8.GetString($bytes)
+    if ((Prop $candidate 'schemaVersion') -eq 2 -and $exists -and -not $importing) {
+      $previous = ConvertFrom-Json ([System.IO.File]::ReadAllText($target.Path, $utf8))
+      $oldBatches = @(Prop $previous 'importBatches' @())
+      foreach ($batch in @(Prop $candidate 'importBatches' @())) {
+        $old = @($oldBatches | Where-Object { $_.id -eq $batch.id })
+        if (-not $old.Count) { Fail 409 'new imports require evidence prepare/commit' }
+        if ($batch.state -eq 'applied' -and $old[0].state -ne 'applied') { Fail 409 'reapply imports through prepare/commit' }
+      }
+    }
+  }
   [void][System.IO.Directory]::CreateDirectory($target.Folder)
   $tmp = "$($target.Path).$([guid]::NewGuid().ToString('N')).tmp"
   [System.IO.File]::WriteAllBytes($tmp, $bytes)
+  # Keep a failed candidate for diagnosis. Never copy over a canonical file on replace failure.
   try {
+    if ((SHA ([System.IO.File]::ReadAllBytes($tmp))) -ne (SHA $bytes)) { Fail 500 'temporary verification failed' }
+    $current = if ([System.IO.File]::Exists($target.Path)) { Stamp $target.Path } else { 'new' }
+    if ($current -ne $before) { Fail 409 'changed during save preparation' }
     if ([System.IO.File]::Exists($target.Path)) {
-      try { [System.IO.File]::Replace($tmp, $target.Path, [NullString]::Value) }
-      catch { [System.IO.File]::Copy($tmp, $target.Path, $true) }
+      $archive = Join-Path $Root 'archive'
+      [void][System.IO.Directory]::CreateDirectory($archive)
+      $backup = Join-Path $archive ("previous-$([guid]::NewGuid().ToString('N'))" + [System.IO.Path]::GetExtension($target.Path))
+      [System.IO.File]::Replace($tmp, $target.Path, $backup)
     } else {
       [System.IO.File]::Move($tmp, $target.Path)
     }
-  } finally {
-    if ([System.IO.File]::Exists($tmp)) { [System.IO.File]::Delete($tmp) }
-  }
+    if ((SHA ([System.IO.File]::ReadAllBytes($target.Path))) -ne (SHA $bytes)) { Fail 503 'saveUnknown: canonical verification differs' }
+    return Stamp $target.Path
+  } catch { throw }
 }
+
+. (Join-Path $PSScriptRoot 'audit.ps1')
 
 function Read-Request($stream) {
   $head = New-Object System.Collections.Generic.List[byte]
@@ -136,8 +171,9 @@ function Route($req) {
     return Reply 200 'text/html; charset=utf-8' ([System.IO.File]::ReadAllBytes($editor))
   }
   if ($req.Headers['x-tylan-token'] -ne $token) { Fail 403 'missing token' }
+  if ($req.Path.StartsWith('/api/audit/') -or $req.Path.StartsWith('/api/imports')) { return Route-Audit $req }
   switch ("$($req.Method) $($req.Path)") {
-    'GET /api/info' { return Json ([ordered]@{ root = $Root }) }
+    'GET /api/info' { return Json ([ordered]@{ root = $Root; audit = (Audit-Info) }) }
     'POST /api/ping' { return Reply 204 'text/plain' (New-Object byte[] 0) }
     'GET /api/list' {
       $dir = [string]$req.Query['dir']
@@ -164,8 +200,8 @@ function Route($req) {
       } elseif ($expect -ne 'any') {
         if (-not $exists -or (Stamp $t.Path) -ne $expect) { Fail 409 'changed elsewhere' }
       }
-      Write-Atomic $t $req.Body
-      return Json ([ordered]@{ lastModified = (Stamp $t.Path) })
+      $stamp = Save-Canonical $t $req.Body $expect
+      return Json ([ordered]@{ lastModified = $stamp })
     }
     'POST /api/copy' {
       $from = Resolve-Target $req.Query['from']
@@ -181,7 +217,7 @@ function Route($req) {
 }
 
 function Send($stream, $res) {
-  $reasons = @{ 200 = 'OK'; 204 = 'No Content'; 400 = 'Bad Request'; 403 = 'Forbidden'; 404 = 'Not Found'; 409 = 'Conflict'; 413 = 'Payload Too Large'; 431 = 'Request Header Fields Too Large'; 500 = 'Internal Server Error' }
+  $reasons = @{ 200 = 'OK'; 202 = 'Accepted'; 204 = 'No Content'; 400 = 'Bad Request'; 403 = 'Forbidden'; 404 = 'Not Found'; 409 = 'Conflict'; 413 = 'Payload Too Large'; 431 = 'Request Header Fields Too Large'; 500 = 'Internal Server Error'; 503 = 'Service Unavailable' }
   $reason = $reasons[[int]$res.Status]
   if (-not $reason) { $reason = 'Error' }
   $bytes = [byte[]]$res.Bytes
@@ -219,6 +255,7 @@ if (-not $NoBrowser) {
 $last = Get-Date
 try {
   while ($true) {
+    Update-AuditLease
     if (-not $listener.Pending()) {
       Start-Sleep -Milliseconds 50
       if (((Get-Date) - $last).TotalMinutes -ge $IdleMinutes) {

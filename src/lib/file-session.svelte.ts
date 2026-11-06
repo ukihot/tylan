@@ -2,8 +2,9 @@
 // Every accepted change is written back to that JSON (autosave) through the launcher.
 import { ConflictError, type Folder } from './folder'
 import { exportFilename, parseDocument } from './io'
-import { nowJst } from './platform'
+import { createId, nowJst } from './platform'
 import { readPublicData } from './publish'
+import type { Doc } from './schema'
 import { MAX_BYTES } from './schema'
 import type { Workspace } from './store.svelte'
 
@@ -23,12 +24,18 @@ export function createFileSession(workspace: Workspace, folder: Folder, delay = 
   let lastModified = ''
   let timer: ReturnType<typeof setTimeout> | undefined
   let busy = false
+  let auditBusy = $state(false)
   let again = false
 
   async function flush(force = false) {
     clearTimeout(timer)
     timer = undefined
-    if (!path || (status === 'conflict' && !force)) {
+    if (
+      auditBusy ||
+      !path ||
+      (status === 'conflict' && !force) ||
+      (workspace.saveState === 'clean' && !force)
+    ) {
       return
     }
     if (busy) {
@@ -39,9 +46,10 @@ export function createFileSession(workspace: Workspace, folder: Folder, delay = 
     status = 'saving'
     try {
       const now = nowJst()
-      const out = workspace.exportJson(now, workspace.doc.project.updatedBy)
+      const out = workspace.prepareSave(now, workspace.doc.project.updatedBy)
       // The launcher refuses the write if the file changed since we read or wrote it.
       lastModified = await folder.write(path, out.text, force ? 'any' : lastModified)
+      workspace.acknowledgeSave(out)
       savedAt = now.slice(11, 19)
       status = 'saved'
       message = ''
@@ -63,7 +71,7 @@ export function createFileSession(workspace: Workspace, folder: Folder, delay = 
     }
   }
   workspace.onChange(() => {
-    if (path && status !== 'conflict') {
+    if (path && status !== 'conflict' && !auditBusy) {
       clearTimeout(timer)
       timer = setTimeout(() => void flush(), delay)
     }
@@ -98,6 +106,47 @@ export function createFileSession(workspace: Workspace, folder: Folder, delay = 
   }
 
   return {
+    get auditBusy() {
+      return auditBusy
+    },
+    get filePath() {
+      return path
+    },
+    async beginImport() {
+      if (auditBusy) {
+        throw new Error('別の取り込みを処理しています')
+      }
+      await flush()
+      for (let attempt = 0; busy && attempt < 600; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      if (!path || status !== 'saved' || workspace.saveState !== 'clean' || busy) {
+        throw new Error('保存・競合を解消してから取り込んでください')
+      }
+      clearTimeout(timer)
+      auditBusy = true
+      workspace.setLocked(true)
+      return { path, expect: lastModified }
+    },
+    completeImport(next: Doc, importId: string, stamp: string) {
+      if (!auditBusy || !workspace.acceptImport(next, importId)) {
+        throw new Error('取り込み結果を検証できません')
+      }
+      workspace.acknowledgeImport(next)
+      lastModified = stamp
+      status = 'saved'
+      savedAt = nowJst().slice(11, 19)
+      message = ''
+    },
+    importUnknown() {
+      status = 'conflict'
+      message =
+        '取り込みの保存結果を確認できません。再取り込みの前に正本を照合・読み直してください。'
+    },
+    endImport() {
+      auditBusy = false
+      workspace.setLocked(false)
+    },
     get root() {
       return root
     },
@@ -180,6 +229,11 @@ export function createFileSession(workspace: Workspace, folder: Folder, delay = 
         if (source) {
           parseDocument(source.text, source.size) // reject a broken source before creating anything
           workspace.load(source.text, source.size)
+          if (workspace.doc.schemaVersion === 2) {
+            workspace.commit((doc) => {
+              doc.documentId = createId('doc')
+            })
+          }
         } else {
           workspace.reset()
         }

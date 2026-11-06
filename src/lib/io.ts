@@ -16,7 +16,7 @@ export function parseDocument(
   if (!input || typeof input !== 'object' || !('format' in input) || input.format !== 'tylan') {
     throw new Error('tylanの正本JSONを選択してください')
   }
-  if (!('schemaVersion' in input) || input.schemaVersion !== 1) {
+  if (!('schemaVersion' in input) || ![1, 2].includes(input.schemaVersion as number)) {
     throw new Error('未対応の形式です。対応するアプリ版を使用してください')
   }
   const result = validate(input)

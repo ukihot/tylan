@@ -336,27 +336,82 @@ export const ProjectSchema = z.strictObject({
   updatedBy: short,
   surveyDate: date,
 })
-export const DocSchema = z.strictObject({
-  format: z.literal('tylan'),
-  schemaVersion: z.literal(1),
-  project: ProjectSchema,
-  sites: z.array(entitySchemas.sites).max(50),
-  locations: z.array(entitySchemas.locations).max(5000),
-  devices: z.array(entitySchemas.devices).max(5000),
-  ports: z.array(entitySchemas.ports).max(50000),
-  links: z.array(entitySchemas.links).max(10000),
-  segments: z.array(entitySchemas.segments).max(5000),
-  ipAssignments: z.array(entitySchemas.ipAssignments).max(50000),
-  dhcpScopes: z.array(entitySchemas.dhcpScopes).max(5000),
-  wirelessNetworks: z.array(entitySchemas.wirelessNetworks).max(5000),
-  auditTemplate: z.strictObject({ version: name, items: z.array(AuditItemSchema).length(20) }),
-  auditRounds: z.array(entitySchemas.auditRounds).max(500),
-  auditResults: z.array(entitySchemas.auditResults).max(25000),
-  evidence: z.array(entitySchemas.evidence).max(25000),
-  actionItems: z.array(entitySchemas.actionItems).max(25000),
-  layouts: z.array(entitySchemas.layouts).max(500),
-  publishSettings: PublishSettingsSchema,
+export const ImportBatchSchema = z.strictObject({
+  id: id('imp'),
+  runId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+  packageHash: z.string().regex(/^[a-f0-9]{64}$/),
+  selectionHash: z.string().regex(/^[a-f0-9]{64}$/),
+  state: z.enum(['applied', 'reverted']),
+  bindings: z
+    .array(
+      z.strictObject({
+        key: z.string().min(1).max(250),
+        collection: z.enum(Object.keys(prefixes) as [Collection, ...Collection[]]),
+        entityId: z.string().regex(/^[a-z]+_[a-zA-Z0-9]{16}$/),
+        valueHash: z.string().regex(/^[a-f0-9]{64}$/),
+      }),
+    )
+    .max(10000),
+  evidenceIds: refs('evidence'),
+  intentReference: text,
+  checkedBy: name,
+  appliedAt: timestamp,
 })
+export type ImportBatch = z.infer<typeof ImportBatchSchema>
+export const DocSchema = z
+  .strictObject({
+    format: z.literal('tylan'),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
+    documentId: id('doc').optional(),
+    importBatches: z.array(ImportBatchSchema).max(5000).optional(),
+    project: ProjectSchema,
+    sites: z.array(entitySchemas.sites).max(50),
+    locations: z.array(entitySchemas.locations).max(5000),
+    devices: z.array(entitySchemas.devices).max(5000),
+    ports: z.array(entitySchemas.ports).max(50000),
+    links: z.array(entitySchemas.links).max(10000),
+    segments: z.array(entitySchemas.segments).max(5000),
+    ipAssignments: z.array(entitySchemas.ipAssignments).max(50000),
+    dhcpScopes: z.array(entitySchemas.dhcpScopes).max(5000),
+    wirelessNetworks: z.array(entitySchemas.wirelessNetworks).max(5000),
+    auditTemplate: z.strictObject({ version: name, items: z.array(AuditItemSchema).length(20) }),
+    auditRounds: z.array(entitySchemas.auditRounds).max(500),
+    auditResults: z.array(entitySchemas.auditResults).max(25000),
+    evidence: z.array(entitySchemas.evidence).max(25000),
+    actionItems: z.array(entitySchemas.actionItems).max(25000),
+    layouts: z.array(entitySchemas.layouts).max(500),
+    publishSettings: PublishSettingsSchema,
+  })
+  .superRefine((doc, ctx) => {
+    if (doc.schemaVersion === 2 && (!doc.documentId || !doc.importBatches)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['documentId'],
+        message: 'v2には正本IDと取り込み記録が必要です',
+      })
+    }
+    if (
+      doc.schemaVersion === 1 &&
+      (doc.documentId !== undefined || doc.importBatches !== undefined)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['schemaVersion'],
+        message: 'v1へv2の項目を追加できません',
+      })
+    }
+    const ids = new Set<string>()
+    for (const batch of doc.importBatches ?? []) {
+      if (ids.has(batch.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['importBatches'],
+          message: '取り込みIDが重複しています',
+        })
+      }
+      ids.add(batch.id)
+    }
+  })
 export type Doc = z.infer<typeof DocSchema>
 export type PublishSettings = z.infer<typeof PublishSettingsSchema>
 

@@ -13,6 +13,9 @@ viewer-r*.html
 *-r[0-9][0-9][0-9][0-9]-*.csv
 
 node_modules
+.venv
+__pycache__/
+.pytest_cache/
 .build
 .vitest
 .svelte-check
