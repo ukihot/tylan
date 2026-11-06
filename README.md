@@ -49,5 +49,6 @@ bun run build
 - [基本設計](doc/basic-design.md)
 - [最新仕様の調査・FCIS・検証記録](doc/implementation.md)
 - [共有への公開・復旧・受入手順](doc/acceptance.md)
+- [現地LAN監査の自動収集・マッピング計画](doc/audit-automation.md)（次期拡張・未実装：PythonからNmap/TShark/PowerShellを統合し、現地で1操作で収集）
 
 ローカルの `file://` はChromiumとEdgeで自動検証済みです。実際のUNC共有、NTFS権限、社内Chrome、標準PCでの性能、ExcelのCSV確認は配布先での受入が必要です。
