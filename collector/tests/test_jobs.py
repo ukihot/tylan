@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 
 import pytest
@@ -73,4 +74,34 @@ def test_worker_failure_does_not_look_completed(tmp_path):
     state = wait(manager, "run1")
     assert state["state"] == "failed"
     assert "route changed" in state["reason"]
+    manager.close()
+
+
+def test_stage_history_progress_and_times_are_published_for_the_screen(tmp_path):
+    release = threading.Event()
+
+    def collect(profile, cancelled, emit):
+        emit("observing", {"startedAt": 100.0, "endsAt": 400.0})
+        emit("scanning", {"done": 1, "total": 4})
+        emit("observing", {"startedAt": 100.0, "endsAt": 400.0})
+        release.wait(5)
+        return {"observations": [], "collectors": [], "findings": []}
+
+    manager = JobManager(tmp_path, "epoch", collect)
+    before = time.time()
+    manager.start("run1", "key", {})
+    for _ in range(400):
+        manager.tick()
+        if manager.states["run1"].get("stages") == ["observing", "scanning"]:
+            break
+        time.sleep(0.005)
+    published = json.loads((tmp_path / "run1" / "state.json").read_text(encoding="utf-8"))
+    assert published["stage"] == "observing"
+    assert published["stages"] == ["observing", "scanning"]
+    assert published["progress"] == {"startedAt": 100.0, "endsAt": 400.0}
+    assert before <= published["startedAt"] <= published["stageStartedAt"] <= time.time()
+    release.set()
+    final = wait(manager, "run1")
+    assert final["stage"] == "finalized"
+    assert final["progress"] is None
     manager.close()

@@ -315,6 +315,10 @@
         </div>
       </section>
     {:else}
+      {#if folder}
+        <!-- Stays mounted while the file is open: a running job is tracked from every screen. -->
+        <AuditPanel {workspace} {files} {folder} visible={screen === 'audit'} />
+      {/if}
       {#if screen === 'project'}
         <section class="panel">
           <div class="section-head">
@@ -394,9 +398,6 @@
       {:else if screen === 'export'}
         <ExportPanel {workspace} {files} />
       {:else if choices.length}
-        {#if screen === 'audit' && files && folder}
-          <AuditPanel {workspace} {files} {folder} />
-        {/if}
         <div class="subtabs" role="tablist" aria-label="データの種類">
           {#each choices as c}
             <button

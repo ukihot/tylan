@@ -437,7 +437,13 @@ class Collector:
                 collectors.append(
                     {"name": "capture", "state": "skipped", "reason": "機能OFFまたはTShark未導入"}
                 )
-            emit("observing")
+            window = (
+                {"startedAt": capture_wall, "endsAt": capture_wall + profile["duration"]}
+                if capture
+                else None
+            )
+            if capture:
+                emit("observing", window)
             passive_until = min(deadline, time.monotonic() + (30 if capture else 0))
             while time.monotonic() < passive_until and not cancelled.wait(0.1):
                 if capture and job.poll(capture) is not None:
@@ -449,8 +455,9 @@ class Collector:
                     listing = command(job, [paths["nmap"], "--iflist"], "nmap-iflist")
                     nic = nmap_interface(listing, profile["source"], adapter["mac"])
                     with RouteWatcher() as watcher:
-                        emit("scanning")
+                        batches = -(-len(targets) // 16)
                         for start in range(0, len(targets), 16):
+                            emit("scanning", {"done": start // 16, "total": batches})
                             if cancelled.is_set() or watcher.changed.is_set():
                                 raise TimeoutError("cancelled/route changed")
                             batch = targets[start : start + 16]
@@ -544,6 +551,7 @@ class Collector:
                 collectors.append({"name": "nmap", "state": "skipped", "reason": "能動収集OFF"})
             capture_end = None
             if capture:
+                emit("observing", window)  # the remaining passive window after scanning
                 stopped = None
                 while job.poll(capture) is None:
                     if cancelled.is_set():
@@ -596,9 +604,9 @@ class Collector:
                     {"kind": "windows", "server": address}
                     for address in management.get("windows", [])
                 ]
-                emit("management")
                 with RouteWatcher() as watcher:
-                    for request in requests:
+                    for done, request in enumerate(requests):
+                        emit("management", {"done": done, "total": len(requests)})
                         try:
                             current = local([request["server"]])
                             if (

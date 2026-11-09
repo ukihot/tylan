@@ -36,12 +36,18 @@ export type Inventory = {
   routes: { prefix: string; ifIndex: number; nextHop: string; metric: number }[]
   ipv6?: { state: 'completed' | 'failed' | 'skipped'; reason: string | null }
 }
+export type RunProgress = { done: number; total: number } | { startedAt: number; endsAt: number }
 export type RunState = {
   runId: string
   state: string
   stage: string
   reason?: string
   sequence: number
+  /** epoch seconds, from the job owner */
+  startedAt?: number
+  stageStartedAt?: number
+  stages?: string[]
+  progress?: RunProgress | null
 }
 export type AuditProfile = {
   mode: 'standard' | 'passive' | 'detail' | 'offline'

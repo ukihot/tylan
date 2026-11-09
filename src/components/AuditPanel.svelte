@@ -17,8 +17,12 @@
   import type { Workspace } from '../lib/store.svelte'
   import Topology from './Topology.svelte'
 
-  let { workspace, files, folder }: { workspace: Workspace; files: FileSession; folder: Folder } =
-    $props()
+  let {
+    workspace,
+    files,
+    folder,
+    visible = true,
+  }: { workspace: Workspace; files: FileSession; folder: Folder; visible?: boolean } = $props()
   const client = untrack(() => createAuditClient(folder))
   const doc = $derived(workspace.doc)
   let profile = $state<AuditProfile>({
@@ -64,7 +68,21 @@
   let linkDrafts = $state<Record<string, LinkDraft>>({})
   let segmentId = $state('')
   let checkedBy = $state('')
-  let busy = $state(false)
+  /** The one foreground job, named so the screen can say what it is waiting for. */
+  let busyLabel = $state('')
+  const busy = $derived(busyLabel !== '')
+  let now = $state(Date.now() / 1000)
+  const ADOPT_STEPS = [
+    '正本の保存を確認',
+    '証跡の転送・封印',
+    '採用計画の作成',
+    '証跡・採用意図の準備',
+    '証跡の再検証',
+    '正本へ保存',
+    '保存結果の照合',
+  ]
+  let adoptStep = $state(-1)
+  let adoptFailed = $state(false)
   let message = $state('')
   let error = $state('')
   let runId = $state('')
@@ -149,6 +167,100 @@
       .map((s) => s.trim())
       .filter(Boolean)
   const errorText = (value: unknown) => (value instanceof Error ? value.message : String(value))
+  type Step = { name: string; status: 'done' | 'current' | 'pending' | 'skipped' | 'failed' }
+  const RUN_STEPS: Record<string, string> = {
+    validating: '設定確認',
+    observing: '通信観測',
+    scanning: '機器探索・ポート',
+    management: '管理情報',
+    finalizing: '最終化',
+  }
+  const clock = (seconds: number) =>
+    `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
+  /** Stages actually reached are done; stages never reached by a finished run were skipped. */
+  const runSteps = $derived.by((): Step[] => {
+    const state = runState?.state
+    const accepted = runState !== null && state !== 'rejected'
+    const visited = runState?.stages ?? []
+    const steps: Step[] = [
+      { name: '受付', status: state === 'rejected' ? 'failed' : accepted ? 'done' : 'current' },
+    ]
+    for (const [key, name] of Object.entries(RUN_STEPS)) {
+      const here = runState?.stage === key
+      steps.push({
+        name,
+        status:
+          active && accepted && here
+            ? 'current'
+            : !active && here && state !== 'completed' && state !== 'partial'
+              ? 'failed'
+              : visited.includes(key)
+                ? 'done'
+                : active || !accepted
+                  ? 'pending'
+                  : 'skipped',
+      })
+    }
+    return steps
+  })
+  const stageName = $derived(runState ? (RUN_STEPS[runState.stage] ?? runState.stage) : '受付待ち')
+  /** Counted work, a time window, or unknown length (an indeterminate bar). */
+  const runMeter = $derived.by(() => {
+    const progress = runState?.progress
+    const label = `${stageName}の進捗`
+    if (progress && 'total' in progress) {
+      const unit = runState!.stage === 'scanning' ? 'バッチ' : '件'
+      return {
+        label,
+        value: progress.done,
+        max: progress.total,
+        text: `${progress.done} / ${progress.total} ${unit}`,
+      }
+    }
+    if (progress && 'endsAt' in progress) {
+      const max = Math.max(1, Math.round(progress.endsAt - progress.startedAt))
+      const value = Math.min(max, Math.max(0, now - progress.startedAt))
+      return {
+        label,
+        value,
+        max,
+        text: `経過 ${clock(value)} / ${clock(max)}（残り約 ${clock(max - value)}）`,
+      }
+    }
+    return {
+      label,
+      value: null,
+      max: null,
+      text: runState
+        ? `${stageName}を処理中`
+        : '収集器の受付を確認中（まだ実行中とは判定していません）',
+    }
+  })
+  const adoptView = $derived(
+    ADOPT_STEPS.map(
+      (name, index): Step => ({
+        name,
+        status:
+          index < adoptStep
+            ? 'done'
+            : index > adoptStep
+              ? 'pending'
+              : adoptFailed
+                ? 'failed'
+                : 'current',
+      }),
+    ),
+  )
+  /** What the floating chip says while the panel is off screen. */
+  const jobLabel = $derived(
+    files.auditBusy && adoptStep >= 0 && adoptStep < ADOPT_STEPS.length
+      ? `取り込み：${ADOPT_STEPS[adoptStep]}`
+      : active
+        ? `${runState ? (stateLabels[runState.state] ?? runState.state) : '受付待ち'}：${stageName}`
+        : busyLabel
+          ? `${busyLabel}中`
+          : '',
+  )
 
   onMount(() => {
     profile.siteId = doc.sites[0]?.id ?? ''
@@ -160,6 +272,7 @@
       void initialize()
     }
     const timer = setInterval(() => {
+      now = Date.now() / 1000
       if (active && !polling) {
         void poll()
       }
@@ -237,11 +350,11 @@
       `/${choice.prefixLength}`
     delete profile.approvedPlanHash
   }
-  async function action(work: () => Promise<void>) {
+  async function action(label: string, work: () => Promise<void>) {
     if (busy) {
       return
     }
-    busy = true
+    busyLabel = label
     error = ''
     message = ''
     try {
@@ -249,7 +362,7 @@
     } catch (e) {
       error = errorText(e)
     } finally {
-      busy = false
+      busyLabel = ''
     }
   }
   async function diagnose() {
@@ -397,6 +510,17 @@
     if (!checkedBy.trim()) {
       throw new Error('確認者を入力してください')
     }
+    adoptStep = 0
+    adoptFailed = false
+    try {
+      await adoptSteps()
+      adoptStep = ADOPT_STEPS.length
+    } catch (e) {
+      adoptFailed = true
+      throw e
+    }
+  }
+  async function adoptSteps() {
     if (doc.schemaVersion === 1) {
       const migrated = migrateV2(doc, plannedDocumentId)
       if (!workspace.commit((draft) => Object.assign(draft, migrated))) {
@@ -407,10 +531,12 @@
     let importId = ''
     let commitAttempted = false
     try {
+      adoptStep = 1
       const sealed = await client!.seal(runId)
       if (!sealed.package) {
         throw new Error('証跡を転送・検証できませんでした。正本の採用を中止しました')
       }
+      adoptStep = 2
       const prepared = await plan(sealed.package.hash, sealed.package.path)
       importId = prepared.importId
       if (JSON.stringify(prepared.doc) === JSON.stringify(doc)) {
@@ -418,6 +544,7 @@
         return
       }
       const output = prepareExport(prepared.doc, nowJst(), checkedBy)
+      adoptStep = 3
       await client!.call('imports/prepare', 'POST', {
         importId,
         path: target.path,
@@ -426,8 +553,10 @@
         text: output.text,
       })
       await waitImport(importId)
+      adoptStep = 4
       await client!.call(`imports/${importId}/verify`, 'POST')
       await waitImport(importId)
+      adoptStep = 5
       commitAttempted = true
       const saved = await client!.call<{ text: string; lastModified: string }>(
         `imports/${importId}/commit`,
@@ -438,6 +567,7 @@
       preview = null
     } catch (e) {
       if (importId && commitAttempted) {
+        adoptStep = 6
         try {
           const status = await client!.call<{ state: string; text: string; lastModified: string }>(
             `imports/${importId}/reconcile`,
@@ -458,429 +588,396 @@
   }
 </script>
 
-<section class="panel audit-panel" aria-label="現地LAN自動監査">
-  <div class="section-head">
-    <div>
-      <p class="eyebrow">ON-SITE AUDIT</p>
-      <h2>現地LANを調べる</h2>
-    </div>
+{#snippet stepper(label: string, steps: Step[])}
+  <ol class="steps" aria-label={label}>
+    {#each steps as step}
+      <li class={step.status} aria-current={step.status === 'current' ? 'step' : undefined}>
+        {step.name}
+      </li>
+    {/each}
+  </ol>
+{/snippet}
+{#snippet meter(label: string, value: number | null, max: number | null, text: string)}
+  <div class="meter">
+    {#if value === null}
+      <progress aria-label={label}></progress>
+    {:else}
+      <progress aria-label={label} {value} {max}></progress>
+    {/if}
+    <span>{text}</span>
   </div>
-  <p>通信監査はIPv4のみ。観測した範囲・時間を記録し、未観測を問題なしにはしません。</p>
-  <p class="muted">IPv6キャプチャ・能動探索は初期版では未対応です。</p>
-  {#if !client}
-    <p>監査用の起動プログラムが接続されていません。通常の台帳編集は利用できます。</p>
-  {:else}
-    {#if error}
-      <div role="alert" class="error">{error}</div>
-    {/if}
-    {#if message}
-      <p role="status">{message}</p>
-    {/if}
-    <fieldset
-      disabled={busy || active || files.auditBusy}
-      oninput={(e) => {
-        if ((e.target as HTMLInputElement).name !== 'routeApproval') {
-          delete profile.approvedPlanHash
-          executionPlan = null
-        }
-      }}
-    >
-      <legend>実行条件</legend>
-      <div class="audit-options">
-        <label>
-          拠点<select bind:value={profile.siteId}>
-            {#each doc.sites as site}
-              <option value={site.id}>{site.name}</option>
-            {/each}
-          </select>
-        </label>
-        <label>
-          監査回次<select bind:value={profile.roundId}>
-            <option value="">機器収集のみ</option>
-            {#each doc.auditRounds as round}
-              <option value={round.id}>{round.name}</option>
-            {/each}
-          </select>
-        </label>
-        <label>
-          監査モード<select bind:value={profile.mode}>
-            <option value="standard">標準：オンリンクIPv4</option>
-            <option value="passive">通信だけ観測</option>
-            <option value="detail">詳細：経路承認が必要</option>
-          </select>
-        </label>
-        <label>
-          観測秒数<input type="number" min="5" max="1800" bind:value={profile.duration}>
-        </label>
-      </div>
-      <button type="button" onclick={() => action(diagnose)}>ホスト設定を取得</button>
-      {#if ipv6Status}
-        <p>{ipv6Status}</p>
+{/snippet}
+{#if !visible}
+  {#if jobLabel}
+    <a class="job-chip" href="#/audit">
+      <strong>現地監査</strong>
+      <span>{jobLabel}</span>
+      {#if active}
+        {@render meter(runMeter.label, runMeter.value, runMeter.max, runMeter.text)}
+      {:else}
+        {@render meter(jobLabel, null, null, '')}
       {/if}
-      <label>
-        送信元NIC<select
-          value={`${profile.ifIndex}:${profile.source}`}
-          onchange={(e) => selectNic(e.currentTarget.value)}
-        >
-          <option value="0:">NICを選択</option>
-          {#if profile.ifIndex && !inventory}
-            <option value={`${profile.ifIndex}:${profile.source}`}>
-              保存済みNIC{profile.source}
-            </option>
-          {/if}
-          {#each addressChoices as address}
-            <option value={`${address.ifIndex}:${address.address}`}>
-              {inventory?.adapters.find((n) => n.ifIndex === address.ifIndex)
-                ?.name} ·{address.address}
-              /{address.prefixLength}
-            </option>
-          {/each}
-        </select>
-      </label>
-      <div class="audit-options">
-        <label>対象IPv4 CIDR<input bind:value={ranges} placeholder="192.168.10.0/24"></label>
-        <label>
-          除外IPv4・CIDR<input
-            bind:value={exclusions}
-            placeholder="192.168.10.10, 192.168.10.128/25"
-          >
-        </label>
-        <label>TCPポート<input bind:value={portText}></label>
-        <label>承認DHCP（空欄＝基準未設定）<input bind:value={dhcpText}></label>
-        <label>想定DNS（空欄＝基準未設定）<input bind:value={dnsText}></label>
-        <label>想定GW（空欄＝基準未設定）<input bind:value={gatewayText}></label>
-        <label>
-          DNS失敗率の閾値（0〜1、空欄＝統計のみ）<input bind:value={ratioText} inputmode="decimal">
-        </label>
+    </a>
+  {/if}
+{:else}
+  <section class="panel audit-panel" aria-label="現地LAN自動監査">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">ON-SITE AUDIT</p>
+        <h2>現地LANを調べる</h2>
       </div>
-      <label class="inline">
-        <input type="checkbox" bind:checked={keepDnsNames}>
-        DNS問い合わせ名を証跡に残す（詳細証跡）
-      </label>
-      {#if keepDnsNames}
-        <label>
-          詳細証跡の保持日数<input type="number" min="1" max="3650" bind:value={retentionDays}>
-        </label>
-        <p class="warning">
-          問い合わせ名は閲覧先を含み得ます。証跡共有のACLと保持期限を確認してください。期限後の削除は管理操作で行い、自動削除しません。
-        </p>
+    </div>
+    <p>通信監査はIPv4のみ。観測した範囲・時間を記録し、未観測を問題なしにはしません。</p>
+    <p class="muted">IPv6キャプチャ・能動探索は初期版では未対応です。</p>
+    {#if !client}
+      <p>監査用の起動プログラムが接続されていません。通常の台帳編集は利用できます。</p>
+    {:else}
+      {#if error}
+        <div role="alert" class="error">{error}</div>
       {/if}
-      <div class="audit-features">
-        {#each featureLabels as [feature, label]}
-          <label>
-            <input type="checkbox" bind:checked={profile.features[feature]}>
-            {label}
-          </label>
-        {/each}
-      </div>
-      <p>標準は選択NICのオンリンクIPv4に限定します。経路不一致・変更時は能動監査を止めます。</p>
-      {#if profile.mode === 'detail'}
-        <p class="warning">
-          詳細調査は実行計画の経路承認が必要です。変更すると承認は無効になります。
-        </p>
-        <div class="audit-options">
-          <label>AD/DCサーバー（IPv4）<input bind:value={adServer}></label>
-          <label>AD検索ベース（OU）<input bind:value={adBase}></label>
-          <label>DHCPサーバー（IPv4・最大10）<input bind:value={dhcpServers}></label>
-          <label>Windows端末（IPv4・最大50）<input bind:value={windowsTargets}></label>
+      {#if message}
+        <p role="status">{message}</p>
+      {/if}
+      {#if busyLabel}
+        <div class="busy" aria-live="polite">
+          {@render meter(busyLabel, null, null, `${busyLabel}中…`)}
         </div>
-        <p class="muted">
-          管理情報は読取のみ。WinRM・FWを有効化せず、資格情報を保存しません。宛先は経路承認の対象に含めます。
-        </p>
+      {/if}
+      <fieldset
+        disabled={busy || active || files.auditBusy}
+        oninput={(e) => {
+          if ((e.target as HTMLInputElement).name !== 'routeApproval') {
+            delete profile.approvedPlanHash
+            executionPlan = null
+          }
+        }}
+      >
+        <legend>実行条件</legend>
+        <div class="audit-options">
+          <label>
+            拠点<select bind:value={profile.siteId}>
+              {#each doc.sites as site}
+                <option value={site.id}>{site.name}</option>
+              {/each}
+            </select>
+          </label>
+          <label>
+            監査回次<select bind:value={profile.roundId}>
+              <option value="">機器収集のみ</option>
+              {#each doc.auditRounds as round}
+                <option value={round.id}>{round.name}</option>
+              {/each}
+            </select>
+          </label>
+          <label>
+            監査モード<select bind:value={profile.mode}>
+              <option value="standard">標準：オンリンクIPv4</option>
+              <option value="passive">通信だけ観測</option>
+              <option value="detail">詳細：経路承認が必要</option>
+            </select>
+          </label>
+          <label>
+            観測秒数<input type="number" min="5" max="1800" bind:value={profile.duration}>
+          </label>
+        </div>
+        <button type="button" onclick={() => action('ホスト設定の取得', diagnose)}>
+          ホスト設定を取得
+        </button>
+        {#if ipv6Status}
+          <p>{ipv6Status}</p>
+        {/if}
+        <label>
+          送信元NIC<select
+            value={`${profile.ifIndex}:${profile.source}`}
+            onchange={(e) => selectNic(e.currentTarget.value)}
+          >
+            <option value="0:">NICを選択</option>
+            {#if profile.ifIndex && !inventory}
+              <option value={`${profile.ifIndex}:${profile.source}`}>
+                保存済みNIC{profile.source}
+              </option>
+            {/if}
+            {#each addressChoices as address}
+              <option value={`${address.ifIndex}:${address.address}`}>
+                {inventory?.adapters.find((n) => n.ifIndex === address.ifIndex)
+                  ?.name} ·{address.address}
+                /{address.prefixLength}
+              </option>
+            {/each}
+          </select>
+        </label>
+        <div class="audit-options">
+          <label>対象IPv4 CIDR<input bind:value={ranges} placeholder="192.168.10.0/24"></label>
+          <label>
+            除外IPv4・CIDR<input
+              bind:value={exclusions}
+              placeholder="192.168.10.10, 192.168.10.128/25"
+            >
+          </label>
+          <label>TCPポート<input bind:value={portText}></label>
+          <label>承認DHCP（空欄＝基準未設定）<input bind:value={dhcpText}></label>
+          <label>想定DNS（空欄＝基準未設定）<input bind:value={dnsText}></label>
+          <label>想定GW（空欄＝基準未設定）<input bind:value={gatewayText}></label>
+          <label>
+            DNS失敗率の閾値（0〜1、空欄＝統計のみ）<input
+              bind:value={ratioText}
+              inputmode="decimal"
+            >
+          </label>
+        </div>
+        <label class="inline">
+          <input type="checkbox" bind:checked={keepDnsNames}>
+          DNS問い合わせ名を証跡に残す（詳細証跡）
+        </label>
+        {#if keepDnsNames}
+          <label>
+            詳細証跡の保持日数<input type="number" min="1" max="3650" bind:value={retentionDays}>
+          </label>
+          <p class="warning">
+            問い合わせ名は閲覧先を含み得ます。証跡共有のACLと保持期限を確認してください。期限後の削除は管理操作で行い、自動削除しません。
+          </p>
+        {/if}
+        <div class="audit-features">
+          {#each featureLabels as [feature, label]}
+            <label>
+              <input type="checkbox" bind:checked={profile.features[feature]}>
+              {label}
+            </label>
+          {/each}
+        </div>
+        <p>標準は選択NICのオンリンクIPv4に限定します。経路不一致・変更時は能動監査を止めます。</p>
+        {#if profile.mode === 'detail'}
+          <p class="warning">
+            詳細調査は実行計画の経路承認が必要です。変更すると承認は無効になります。
+          </p>
+          <div class="audit-options">
+            <label>AD/DCサーバー（IPv4）<input bind:value={adServer}></label>
+            <label>AD検索ベース（OU）<input bind:value={adBase}></label>
+            <label>DHCPサーバー（IPv4・最大10）<input bind:value={dhcpServers}></label>
+            <label>Windows端末（IPv4・最大50）<input bind:value={windowsTargets}></label>
+          </div>
+          <p class="muted">
+            管理情報は読取のみ。WinRM・FWを有効化せず、資格情報を保存しません。宛先は経路承認の対象に含めます。
+          </p>
+          <button
+            type="button"
+            onclick={() =>
+              action('経路と対象の確認', async () => {
+                const request = await client.call<{ requestId: string }>('audit/plan', 'POST', {
+                  profile: currentProfile(),
+                })
+                const reply = await client.response(request.requestId)
+                executionPlan = reply.executionPlan ?? null
+              })}
+          >
+            経路と対象を確認
+          </button>
+          {#if executionPlan}
+            <div class="confirm-box">
+              <p>
+                送信元{executionPlan.source} · 対象{executionPlan.targets.length} · 計画{executionPlan.hash}
+              </p>
+              <ul>
+                {#each executionPlan.routes as route}
+                  <li>
+                    {route.prefix} →{route.nextHop} / NIC{route.ifIndex} / metric{route.metric}
+                  </li>
+                {/each}
+              </ul>
+              <label>
+                <input
+                  type="checkbox"
+                  name="routeApproval"
+                  checked={profile.approvedPlanHash === executionPlan.hash}
+                  onchange={(e) => {
+                    profile.approvedPlanHash = e.currentTarget.checked
+                      ? executionPlan?.hash
+                      : undefined
+                  }}
+                >
+                表示した対象・経路・次ホップでこの実行を承認
+              </label>
+            </div>
+          {/if}
+        {/if}
+        <div class="audit-options">
+          <label>プロファイル名<input bind:value={profileName}></label>
+          <label>
+            保存済みプロファイル<select
+              onchange={(e) => {
+                const saved = profiles.find((p) => p.id === e.currentTarget.value)
+                if (saved) {
+                  applyProfile(saved.profile)
+                }
+              }}
+            >
+              <option value="">選択</option>
+              {#each profiles as saved}
+                <option value={saved.id}>{saved.name}</option>
+              {/each}
+            </select>
+          </label>
+        </div>
         <button
           type="button"
           onclick={() =>
-            action(async () => {
-              const request = await client.call<{ requestId: string }>('audit/plan', 'POST', {
+            action('プロファイルの保存', async () => {
+              await client.call('audit/profiles', 'POST', {
+                name: profileName,
                 profile: currentProfile(),
               })
-              const reply = await client.response(request.requestId)
-              executionPlan = reply.executionPlan ?? null
+              profiles = await client.call('audit/profiles')
+              message = 'プロファイルを保存しました'
             })}
         >
-          経路と対象を確認
+          プロファイルを保存
         </button>
-        {#if executionPlan}
-          <div class="confirm-box">
-            <p>
-              送信元{executionPlan.source} · 対象{executionPlan.targets.length} · 計画{executionPlan.hash}
-            </p>
-            <ul>
-              {#each executionPlan.routes as route}
-                <li>{route.prefix} →{route.nextHop} / NIC{route.ifIndex} / metric{route.metric}</li>
-              {/each}
-            </ul>
-            <label>
-              <input
-                type="checkbox"
-                name="routeApproval"
-                checked={profile.approvedPlanHash === executionPlan.hash}
-                onchange={(e) => {
-                  profile.approvedPlanHash = e.currentTarget.checked
-                    ? executionPlan?.hash
-                    : undefined
-                }}
-              >
-              表示した対象・経路・次ホップでこの実行を承認
-            </label>
-          </div>
-        {/if}
-      {/if}
-      <div class="audit-options">
-        <label>プロファイル名<input bind:value={profileName}></label>
-        <label>
-          保存済みプロファイル<select
-            onchange={(e) => {
-              const saved = profiles.find((p) => p.id === e.currentTarget.value)
-              if (saved) {
-                applyProfile(saved.profile)
-              }
-            }}
-          >
-            <option value="">選択</option>
-            {#each profiles as saved}
-              <option value={saved.id}>{saved.name}</option>
-            {/each}
-          </select>
-        </label>
-      </div>
-      <button
-        type="button"
-        onclick={() =>
-          action(async () => {
-            await client.call('audit/profiles', 'POST', {
-              name: profileName,
-              profile: currentProfile(),
-            })
-            profiles = await client.call('audit/profiles')
-            message = 'プロファイルを保存しました'
-          })}
-      >
-        プロファイルを保存
-      </button>
-      <button
-        type="button"
-        class="primary"
-        disabled={!profile.siteId ||
-          !profile.ifIndex ||
-          (profile.mode === 'detail' && !profile.approvedPlanHash)}
-        onclick={() => action(start)}
-      >
-        現地監査を開始
-      </button>
-    </fieldset>
-    <fieldset disabled={busy || active || files.auditBusy}>
-      <legend>スイッチ情報のオフライン取り込み</legend>
-      <p class="muted">
-        tylan-switch-export
-        v1形式（LLDP/CDP/MACテーブル）のJSONを読み込みます。ネットワークへ送信せず、資格情報は受け付けません。
-      </p>
-      <label>
-        エクスポートJSON<input
-          type="file"
-          accept=".json,application/json"
-          onchange={(e) => {
-            switchFile = e.currentTarget.files?.[0] ?? null
-          }}
-        >
-      </label>
-      <button
-        type="button"
-        disabled={!switchFile || !profile.siteId}
-        onclick={() => action(importSwitch)}
-      >
-        スイッチ情報を取り込む
-      </button>
-    </fieldset>
-    {#if runId}
-      <div class="confirm-box">
-        <p>
-          実行{runId} ·{runState
-            ? (stateLabels[runState.state] ?? runState.state)
-            : '受付未確認'} ·{runState?.stage ?? '起動確認中'}
-        </p>
-        {#if runState?.reason}
-          <p>{runState.reason}</p>
-        {/if}
-        <button type="button" onclick={poll}>実行状態を再確認</button>
         <button
           type="button"
-          disabled={!active}
-          onclick={() =>
-            action(async () => {
-              await client.cancel(runId)
-              message = '停止を依頼しました。停止完了を確認しています。'
-              await poll()
-            })}
+          class="primary"
+          disabled={!profile.siteId ||
+            !profile.ifIndex ||
+            (profile.mode === 'detail' && !profile.approvedPlanHash)}
+          onclick={() => action('監査の開始依頼', start)}
         >
-          監査を中止
+          現地監査を開始
         </button>
-      </div>
-    {/if}
-    {#if result}
-      <p>観測期間{result.startedAt} ～{result.endedAt}。収集器ごとの成否を確認してください。</p>
-      {#if incomplete}
-        <p class="warning">
-          部分完了：一部の収集器が完了していません。成功とは扱わず、未実施・失敗・打ち切りの範囲を確認してください。
+      </fieldset>
+      <fieldset disabled={busy || active || files.auditBusy}>
+        <legend>スイッチ情報のオフライン取り込み</legend>
+        <p class="muted">
+          tylan-switch-export
+          v1形式（LLDP/CDP/MACテーブル）のJSONを読み込みます。ネットワークへ送信せず、資格情報は受け付けません。
         </p>
-      {/if}
-      <p class="muted">
-        観測点{String(result.scope.observationPoint ?? '不明')} · フィルター{String(
-          result.scope.captureFilter ?? 'なし',
-        )}
-        {#if result.scope.retainUntil}
-          · 詳細証跡の保持期限{String(result.scope.retainUntil)}
-        {/if}
-      </p>
-      <ul>
-        {#each result.collectors as collector}
-          <li>
-            {String(collector.name)}
-            ：{collectorLabels[String(collector.state)] ?? String(collector.state)}
-            {String(collector.reason ?? '')}
-            {#if collector.name === 'capture' && collector.state !== 'skipped'}
-              {`（パケット ${collector.captured ?? '取得不能'} · ドロップ ${collector.dropped ?? '取得不能'} · 行 ${collector.rows ?? '-'} · 集計外 ${collector.omitted ?? 0}）`}
-            {/if}
-          </li>
-        {/each}
-      </ul>
-      <div class="audit-options">
         <label>
-          採用先セグメント<select bind:value={segmentId}>
-            <option value="">選択</option>
-            {#each doc.segments.filter((s) => s.siteId === profile.siteId) as segment}
-              <option value={segment.id}>{segment.name} ·{segment.cidr ?? 'CIDR未確認'}</option>
-            {/each}
-          </select>
+          エクスポートJSON<input
+            type="file"
+            accept=".json,application/json"
+            onchange={(e) => {
+              switchFile = e.currentTarget.files?.[0] ?? null
+            }}
+          >
         </label>
-        <label>確認者<input bind:value={checkedBy}></label>
-      </div>
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>採用候補</th>
-              <th>IP / MAC</th>
-              <th>根拠</th>
-              <th>既存機器との照合</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each deviceObservations as observation}
-              <tr>
-                <td>
-                  <input
-                    type="checkbox"
-                    aria-label={`${String(observation.value.ip)}を採用候補に選択`}
-                    bind:checked={selected[observation.id]}
-                  >
-                </td>
-                <td>
-                  {String(observation.value.ip)}
-                  <br>
-                  {String(observation.value.mac ?? 'MAC未取得')}
-                </td>
-                <td>
-                  {observation.source} ·{observation.observedAt}
-                  <br>
-                  {JSON.stringify(observation.value.ports ?? [])}
-                </td>
-                <td>
-                  <select
-                    aria-label={`${String(observation.value.ip)}の照合先`}
-                    value={mappings[observation.id] ?? ''}
-                    onchange={(e) => {
-                      mappings[observation.id] = e.currentTarget.value
-                    }}
-                  >
-                    <option value="">照合先を選択（候補なしなら新規）</option>
-                    <option value="new">新規機器として採用</option>
-                    {#each candidates(doc, observation, profile.siteId) as candidate}
-                      <option value={candidate.id}>{candidate.name}（一致は候補）</option>
-                    {/each}
-                  </select>
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
-      {#if linkObservations.length}
-        <h3>接続候補（スイッチ情報） · 両端を対応付けた候補だけを推定として採用</h3>
+        <button
+          type="button"
+          disabled={!switchFile || !profile.siteId}
+          onclick={() => action('スイッチ情報の取り込み依頼', importSwitch)}
+        >
+          スイッチ情報を取り込む
+        </button>
+      </fieldset>
+      {#if runId}
+        <div class="confirm-box">
+          <p role="status">
+            {`実行 ${runId} · ${runState ? (stateLabels[runState.state] ?? runState.state) : '受付未確認'}${active ? ` · ${stageName}` : ''}`}
+          </p>
+          {@render stepper('実行の段階', runSteps)}
+          {#if active}
+            {@render meter(runMeter.label, runMeter.value, runMeter.max, runMeter.text)}
+          {/if}
+          {#if runState?.startedAt}
+            <p class="muted">
+              {`開始から ${clock(Math.max(0, now - runState.startedAt))}`}
+            </p>
+          {/if}
+          {#if runState?.reason}
+            <p>{runState.reason}</p>
+          {/if}
+          <button type="button" onclick={poll}>実行状態を再確認</button>
+          <button
+            type="button"
+            disabled={!active}
+            onclick={() =>
+              action('停止の依頼', async () => {
+                await client.cancel(runId)
+                message = '停止を依頼しました。停止完了を確認しています。'
+                await poll()
+              })}
+          >
+            監査を中止
+          </button>
+        </div>
+      {/if}
+      {#if result}
+        <p>観測期間{result.startedAt} ～{result.endedAt}。収集器ごとの成否を確認してください。</p>
+        {#if incomplete}
+          <p class="warning">
+            部分完了：一部の収集器が完了していません。成功とは扱わず、未実施・失敗・打ち切りの範囲を確認してください。
+          </p>
+        {/if}
+        <p class="muted">
+          観測点{String(result.scope.observationPoint ?? '不明')} · フィルター{String(
+            result.scope.captureFilter ?? 'なし',
+          )}
+          {#if result.scope.retainUntil}
+            · 詳細証跡の保持期限{String(result.scope.retainUntil)}
+          {/if}
+        </p>
+        <ul>
+          {#each result.collectors as collector}
+            <li>
+              {String(collector.name)}
+              ：{collectorLabels[String(collector.state)] ?? String(collector.state)}
+              {String(collector.reason ?? '')}
+              {#if collector.name === 'capture' && collector.state !== 'skipped'}
+                {`（パケット ${collector.captured ?? '取得不能'} · ドロップ ${collector.dropped ?? '取得不能'} · 行 ${collector.rows ?? '-'} · 集計外 ${collector.omitted ?? 0}）`}
+              {/if}
+            </li>
+          {/each}
+        </ul>
+        <div class="audit-options">
+          <label>
+            採用先セグメント<select bind:value={segmentId}>
+              <option value="">選択</option>
+              {#each doc.segments.filter((s) => s.siteId === profile.siteId) as segment}
+                <option value={segment.id}>{segment.name} ·{segment.cidr ?? 'CIDR未確認'}</option>
+              {/each}
+            </select>
+          </label>
+          <label>確認者<input bind:value={checkedBy}></label>
+        </div>
         <div class="table-scroll">
           <table>
             <thead>
               <tr>
-                <th>採用</th>
-                <th>候補</th>
-                <th>接続元（機器・ポート）</th>
-                <th>接続先（機器・ポート）</th>
+                <th>採用候補</th>
+                <th>IP / MAC</th>
+                <th>根拠</th>
+                <th>既存機器との照合</th>
               </tr>
             </thead>
             <tbody>
-              {#each linkObservations as obs}
-                {@const label = `${String(obs.value.localDevice)} ${String(obs.value.localPort)}`}
-                {@const chosen = draft(obs.id)}
+              {#each deviceObservations as observation}
                 <tr>
                   <td>
                     <input
                       type="checkbox"
-                      aria-label={`${label}の接続候補を選択`}
-                      bind:checked={selected[obs.id]}
+                      aria-label={`${String(observation.value.ip)}を採用候補に選択`}
+                      bind:checked={selected[observation.id]}
                     >
                   </td>
                   <td>
-                    {String(obs.value.protocol).toUpperCase()}
-                    {label} →{String(obs.value.remoteDevice)}
-                    {String(obs.value.remotePort ?? '')}
+                    {String(observation.value.ip)}
                     <br>
-                    {obs.value.linkKind === 'physical'
-                      ? '物理接続の推定'
-                      : 'MACテーブル：論理接続のみ（配線の証明にしない）'}
+                    {String(observation.value.mac ?? 'MAC未取得')}
+                  </td>
+                  <td>
+                    {observation.source} ·{observation.observedAt}
+                    <br>
+                    {JSON.stringify(observation.value.ports ?? [])}
                   </td>
                   <td>
                     <select
-                      aria-label={`${label}の接続元機器`}
-                      value={chosen.aDevice}
-                      onchange={(e) =>
-                        setDraft(obs.id, { aDevice: e.currentTarget.value, aPort: '' })}
+                      aria-label={`${String(observation.value.ip)}の照合先`}
+                      value={mappings[observation.id] ?? ''}
+                      onchange={(e) => {
+                        mappings[observation.id] = e.currentTarget.value
+                      }}
                     >
-                      <option value="">機器を選択</option>
-                      {#each siteDevices as device}
-                        <option value={device.id}>{device.name}</option>
-                      {/each}
-                    </select>
-                    <select
-                      aria-label={`${label}の接続元ポート`}
-                      value={chosen.aPort}
-                      onchange={(e) => setDraft(obs.id, { aPort: e.currentTarget.value })}
-                    >
-                      <option value="">ポート未確認</option>
-                      {#each doc.ports.filter((p) => p.deviceId === chosen.aDevice) as port}
-                        <option value={port.id}>{port.name}</option>
-                      {/each}
-                    </select>
-                  </td>
-                  <td>
-                    <select
-                      aria-label={`${label}の接続先機器`}
-                      value={chosen.bDevice}
-                      onchange={(e) =>
-                        setDraft(obs.id, { bDevice: e.currentTarget.value, bPort: '' })}
-                    >
-                      <option value="">不明端点として記録</option>
-                      {#each siteDevices as device}
-                        <option value={device.id}>{device.name}</option>
-                      {/each}
-                    </select>
-                    <select
-                      aria-label={`${label}の接続先ポート`}
-                      value={chosen.bPort}
-                      onchange={(e) => setDraft(obs.id, { bPort: e.currentTarget.value })}
-                    >
-                      <option value="">ポート未確認</option>
-                      {#each doc.ports.filter((p) => p.deviceId === chosen.bDevice) as port}
-                        <option value={port.id}>{port.name}</option>
+                      <option value="">照合先を選択（候補なしなら新規）</option>
+                      <option value="new">新規機器として採用</option>
+                      {#each candidates(doc, observation, profile.siteId) as candidate}
+                        <option value={candidate.id}>{candidate.name}（一致は候補）</option>
                       {/each}
                     </select>
                   </td>
@@ -889,151 +986,239 @@
             </tbody>
           </table>
         </div>
-      {/if}
-      {#if managementObservations.length}
-        <h3>管理情報（AD・DHCPサーバー）</h3>
-        {#each managementObservations as obs}
-          <div class="audit-finding">
-            <input
-              type="checkbox"
-              aria-label={`${String(obs.value.name ?? obs.value.scopeId)}を採用候補に選択`}
-              bind:checked={selected[obs.id]}
-            >
-            {#if obs.type === 'adComputer'}
-              <span>
-                AD：{String(obs.value.name)} ·{String(obs.value.operatingSystem ?? 'OS不明')}
-                （AD登録は稼働・IPを保証しません）
-              </span>
-              <select
-                aria-label={`${String(obs.value.name)}の照合先`}
-                value={mappings[obs.id] ?? ''}
-                onchange={(e) => {
-                  mappings[obs.id] = e.currentTarget.value
-                }}
-              >
-                <option value="">照合先を選択</option>
-                <option value="new">新規機器として採用</option>
-                {#each siteDevices as device}
-                  <option value={device.id}>{device.name}</option>
+        {#if linkObservations.length}
+          <h3>接続候補（スイッチ情報） · 両端を対応付けた候補だけを推定として採用</h3>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>採用</th>
+                  <th>候補</th>
+                  <th>接続元（機器・ポート）</th>
+                  <th>接続先（機器・ポート）</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each linkObservations as obs}
+                  {@const label = `${String(obs.value.localDevice)} ${String(obs.value.localPort)}`}
+                  {@const chosen = draft(obs.id)}
+                  <tr>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`${label}の接続候補を選択`}
+                        bind:checked={selected[obs.id]}
+                      >
+                    </td>
+                    <td>
+                      {String(obs.value.protocol).toUpperCase()}
+                      {label} →{String(obs.value.remoteDevice)}
+                      {String(obs.value.remotePort ?? '')}
+                      <br>
+                      {obs.value.linkKind === 'physical'
+                        ? '物理接続の推定'
+                        : 'MACテーブル：論理接続のみ（配線の証明にしない）'}
+                    </td>
+                    <td>
+                      <select
+                        aria-label={`${label}の接続元機器`}
+                        value={chosen.aDevice}
+                        onchange={(e) =>
+                          setDraft(obs.id, { aDevice: e.currentTarget.value, aPort: '' })}
+                      >
+                        <option value="">機器を選択</option>
+                        {#each siteDevices as device}
+                          <option value={device.id}>{device.name}</option>
+                        {/each}
+                      </select>
+                      <select
+                        aria-label={`${label}の接続元ポート`}
+                        value={chosen.aPort}
+                        onchange={(e) => setDraft(obs.id, { aPort: e.currentTarget.value })}
+                      >
+                        <option value="">ポート未確認</option>
+                        {#each doc.ports.filter((p) => p.deviceId === chosen.aDevice) as port}
+                          <option value={port.id}>{port.name}</option>
+                        {/each}
+                      </select>
+                    </td>
+                    <td>
+                      <select
+                        aria-label={`${label}の接続先機器`}
+                        value={chosen.bDevice}
+                        onchange={(e) =>
+                          setDraft(obs.id, { bDevice: e.currentTarget.value, bPort: '' })}
+                      >
+                        <option value="">不明端点として記録</option>
+                        {#each siteDevices as device}
+                          <option value={device.id}>{device.name}</option>
+                        {/each}
+                      </select>
+                      <select
+                        aria-label={`${label}の接続先ポート`}
+                        value={chosen.bPort}
+                        onchange={(e) => setDraft(obs.id, { bPort: e.currentTarget.value })}
+                      >
+                        <option value="">ポート未確認</option>
+                        {#each doc.ports.filter((p) => p.deviceId === chosen.bDevice) as port}
+                          <option value={port.id}>{port.name}</option>
+                        {/each}
+                      </select>
+                    </td>
+                  </tr>
                 {/each}
-              </select>
-            {:else}
-              <span>
-                DHCPスコープ：{String(obs.value.scopeId)}/{String(obs.value.subnetMask)} ·{String(
-                  obs.value.start,
-                )}
-                ～{String(obs.value.end)} · サーバー{String(obs.value.server)}
-                （記録済みのスコープは上書きしません）
-              </span>
-            {/if}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+        {#if managementObservations.length}
+          <h3>管理情報（AD・DHCPサーバー）</h3>
+          {#each managementObservations as obs}
+            <div class="audit-finding">
+              <input
+                type="checkbox"
+                aria-label={`${String(obs.value.name ?? obs.value.scopeId)}を採用候補に選択`}
+                bind:checked={selected[obs.id]}
+              >
+              {#if obs.type === 'adComputer'}
+                <span>
+                  AD：{String(obs.value.name)} ·{String(obs.value.operatingSystem ?? 'OS不明')}
+                  （AD登録は稼働・IPを保証しません）
+                </span>
+                <select
+                  aria-label={`${String(obs.value.name)}の照合先`}
+                  value={mappings[obs.id] ?? ''}
+                  onchange={(e) => {
+                    mappings[obs.id] = e.currentTarget.value
+                  }}
+                >
+                  <option value="">照合先を選択</option>
+                  <option value="new">新規機器として採用</option>
+                  {#each siteDevices as device}
+                    <option value={device.id}>{device.name}</option>
+                  {/each}
+                </select>
+              {:else}
+                <span>
+                  DHCPスコープ：{String(obs.value.scopeId)}/{String(obs.value.subnetMask)} ·{String(
+                    obs.value.start,
+                  )}
+                  ～{String(obs.value.end)} · サーバー{String(obs.value.server)}
+                  （記録済みのスコープは上書きしません）
+                </span>
+              {/if}
+            </div>
+          {/each}
+        {/if}
+        <h3>異常候補・追加確認</h3>
+        {#each result.findings as finding}
+          <label class="audit-finding">
+            <input type="checkbox" bind:checked={selected[finding.id]}>
+            No.{finding.itemNo} ·{finding.status}
+            ：{finding.reason}
+            <small>次の確認：{finding.nextCheck}</small>
+          </label>
+        {/each}
+        <p class="muted">
+          選択した結果だけ採用します。初回はv2へ移行し、旧正本をarchiveへ保全します。監査判定は未確認の下書きとして扱います。
+        </p>
+        <button
+          type="button"
+          disabled={busy || !selectedKeys.length}
+          onclick={() =>
+            action('採用差分の作成', async () => {
+              preview = (await plan('0'.repeat(64), '未採用プレビュー')).doc
+            })}
+        >
+          論理マップ・採用差分を確認
+        </button>
+        <button
+          type="button"
+          class="primary"
+          disabled={busy || !selectedKeys.length}
+          onclick={() => action('選択した結果の取り込み', adopt)}
+        >
+          選択した結果を取り込む
+        </button>
+        {#if adoptStep >= 0}
+          {@render stepper('取り込みの段階', adoptView)}
+        {/if}
+        {#if preview}
+          <div class="audit-preview">
+            <h3>未採用プレビュー · 物理配線は生成しません</h3>
+            <Topology doc={preview} />
+          </div>
+        {/if}
+      {/if}
+      <details>
+        <summary>保存済みの実行結果</summary>
+        <button
+          type="button"
+          onclick={() =>
+            action('実行一覧の更新', async () => {
+              past = await client.call('audit/past')
+            })}
+        >
+          実行一覧を更新
+        </button>
+        {#each past as old}
+          <div>
+            <span>{old.runId} ·{old.state}</span>
+            <button
+              type="button"
+              disabled={busy || active}
+              onclick={() => action('実行結果の読込', () => openPast(old.runId))}
+            >
+              この実行を開く
+            </button>
+            <button
+              type="button"
+              disabled={!result || active || busy}
+              onclick={() =>
+                action('比較元の読込', async () => {
+                  await client.call('audit/open', 'POST', { runId: old.runId })
+                  previous = await client.result(old.runId)
+                })}
+            >
+              比較元にする
+            </button>
           </div>
         {/each}
-      {/if}
-      <h3>異常候補・追加確認</h3>
-      {#each result.findings as finding}
-        <label class="audit-finding">
-          <input type="checkbox" bind:checked={selected[finding.id]}>
-          No.{finding.itemNo} ·{finding.status}
-          ：{finding.reason}
-          <small>次の確認：{finding.nextCheck}</small>
-        </label>
-      {/each}
-      <p class="muted">
-        選択した結果だけ採用します。初回はv2へ移行し、旧正本をarchiveへ保全します。監査判定は未確認の下書きとして扱います。
-      </p>
-      <button
-        type="button"
-        disabled={busy || !selectedKeys.length}
-        onclick={() =>
-          action(async () => {
-            preview = (await plan('0'.repeat(64), '未採用プレビュー')).doc
-          })}
-      >
-        論理マップ・採用差分を確認
-      </button>
-      <button
-        type="button"
-        class="primary"
-        disabled={busy || !selectedKeys.length}
-        onclick={() => action(adopt)}
-      >
-        選択した結果を取り込む
-      </button>
-      {#if preview}
-        <div class="audit-preview">
-          <h3>未採用プレビュー · 物理配線は生成しません</h3>
-          <Topology doc={preview} />
+      </details>
+      {#if diff}
+        <div class="confirm-box">
+          <h3>前回との差分</h3>
+          <p>
+            {diff.conditions.length
+              ? `実行条件・ツールに差があります（${diff.conditions.join(', ')}）。差分は条件の違いを含みます。`
+              : '同じ実行条件'}
+          </p>
+          <p>
+            {`追加 ${diff.added.length}件 · 変更 ${diff.changed.length}件 · 今回未観測 ${diff.unobserved.length}件`}
+          </p>
+          <h4>追加（今回初めて観測）</h4>
+          <ul>
+            {#each diff.added as device}
+              <li>{device.ip} ·{device.mac ?? 'MAC未取得'}</li>
+            {/each}
+          </ul>
+          <h4>変更</h4>
+          <ul>
+            {#each diff.changed as change}
+              <li>{change.ip} ·{change.fields.join('・')}：{change.before} →{change.after}</li>
+            {/each}
+          </ul>
+          <h4>今回未観測（撤去とは判断しません）</h4>
+          <ul>
+            {#each diff.unobserved as device}
+              <li>{device.ip} ·{device.mac ?? 'MAC未取得'}</li>
+            {/each}
+          </ul>
         </div>
       {/if}
     {/if}
-    <details>
-      <summary>保存済みの実行結果</summary>
-      <button
-        type="button"
-        onclick={() =>
-          action(async () => {
-            past = await client.call('audit/past')
-          })}
-      >
-        実行一覧を更新
-      </button>
-      {#each past as old}
-        <div>
-          <span>{old.runId} ·{old.state}</span>
-          <button
-            type="button"
-            disabled={busy || active}
-            onclick={() => action(() => openPast(old.runId))}
-          >
-            この実行を開く
-          </button>
-          <button
-            type="button"
-            disabled={!result || active || busy}
-            onclick={() =>
-              action(async () => {
-                await client.call('audit/open', 'POST', { runId: old.runId })
-                previous = await client.result(old.runId)
-              })}
-          >
-            比較元にする
-          </button>
-        </div>
-      {/each}
-    </details>
-    {#if diff}
-      <div class="confirm-box">
-        <h3>前回との差分</h3>
-        <p>
-          {diff.conditions.length
-            ? `実行条件・ツールに差があります（${diff.conditions.join(', ')}）。差分は条件の違いを含みます。`
-            : '同じ実行条件'}
-        </p>
-        <p>
-          {`追加 ${diff.added.length}件 · 変更 ${diff.changed.length}件 · 今回未観測 ${diff.unobserved.length}件`}
-        </p>
-        <h4>追加（今回初めて観測）</h4>
-        <ul>
-          {#each diff.added as device}
-            <li>{device.ip} ·{device.mac ?? 'MAC未取得'}</li>
-          {/each}
-        </ul>
-        <h4>変更</h4>
-        <ul>
-          {#each diff.changed as change}
-            <li>{change.ip} ·{change.fields.join('・')}：{change.before} →{change.after}</li>
-          {/each}
-        </ul>
-        <h4>今回未観測（撤去とは判断しません）</h4>
-        <ul>
-          {#each diff.unobserved as device}
-            <li>{device.ip} ·{device.mac ?? 'MAC未取得'}</li>
-          {/each}
-        </ul>
-      </div>
-    {/if}
-  {/if}
-</section>
+  </section>
+{/if}
 
 <style>
   fieldset {
@@ -1083,6 +1268,86 @@
   }
   button {
     margin: 4px;
+  }
+  .steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0;
+    margin: 12px 0;
+    list-style: none;
+    counter-reset: step;
+  }
+  .steps li {
+    counter-increment: step;
+    padding: 4px 10px;
+    border: 1px solid #c9d1d9;
+    border-radius: 999px;
+    color: #57606a;
+    font-size: 0.9em;
+  }
+  .steps li::before {
+    content: counter(step) ". ";
+  }
+  .steps li.done {
+    border-color: #2da44e;
+    color: #1a7f37;
+  }
+  .steps li.done::before {
+    content: "✓ ";
+  }
+  .steps li.current {
+    border-color: #0969da;
+    background: #ddf4ff;
+    color: #0550ae;
+    font-weight: 600;
+  }
+  .steps li.failed {
+    border-color: #cf222e;
+    color: #cf222e;
+  }
+  .steps li.failed::before {
+    content: "× ";
+  }
+  .steps li.skipped {
+    border-style: dashed;
+    text-decoration: line-through;
+  }
+  .meter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+  }
+  .meter progress {
+    flex: 1 1 160px;
+    min-width: 120px;
+    max-width: 360px;
+    height: 10px;
+  }
+  .busy {
+    margin: 8px 0;
+  }
+  .job-chip {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 20;
+    display: grid;
+    gap: 4px;
+    width: min(360px, calc(100vw - 32px));
+    padding: 10px 14px;
+    border: 1px solid #0969da;
+    border-radius: 10px;
+    background: #fff;
+    box-shadow: 0 6px 20px rgb(0 0 0 / 0.15);
+    color: inherit;
+    text-decoration: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    progress {
+      animation: none;
+    }
   }
   input[type="checkbox"] {
     width: auto;

@@ -215,3 +215,38 @@ test('取り込み処理中は画面移動とページ終了を止める', async
   window.dispatchEvent(unload)
   expect(unload.defaultPrevented).toBe(true)
 })
+
+test('実行中の監査は他の画面でも状況と進捗を表示し、監査画面へ戻れる', async () => {
+  window.location.hash = '#/project'
+  const fake = memoryFolder()
+  await fake.folder.write('working/network.json', JSON.stringify(fixture()), 'new')
+  const now = Date.now() / 1000
+  const replies: Record<string, unknown> = {
+    'audit/runs': [{ runId: 'run1' }],
+    'audit/runs/run1': {
+      response: { accepted: true, runId: 'run1' },
+      state: {
+        runId: 'run1',
+        state: 'running',
+        stage: 'scanning',
+        sequence: 3,
+        startedAt: now - 30,
+        stages: ['validating', 'scanning'],
+        progress: { done: 1, total: 4 },
+      },
+    },
+  }
+  fake.folder.audit = async (_method, path) => replies[path] ?? []
+  const screen = await render(App, { folder: fake.folder })
+  await screen.getByRole('button', { name: 'network.json を開く' }).click()
+  await expect.element(screen.getByText('network.json を開きました。')).toBeVisible()
+  const chip = screen.getByRole('link', { name: /現地監査.*機器探索・ポート/ })
+  await expect.element(chip).toBeVisible()
+  await expect.element(chip.getByRole('progressbar')).toHaveAttribute('value', '1')
+  await chip.click()
+  await expect.poll(() => window.location.hash).toBe('#/audit')
+  await expect
+    .element(screen.getByRole('progressbar', { name: '機器探索・ポートの進捗' }))
+    .toBeVisible()
+  await expect.element(chip).not.toBeInTheDocument()
+})

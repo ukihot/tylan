@@ -190,3 +190,88 @@ test('the previous-run comparison lists additions and not-observed devices, neve
   await expect.element(screen.getByText(/192\.168\.1\.50/)).toBeVisible()
   await expect.element(screen.getByText(/追加 1件/)).toBeVisible()
 })
+
+const epoch = () => Date.now() / 1000
+const runningRun = (state: Record<string, unknown>) => ({
+  'GET audit/runs': [{ runId: 'run1' }],
+  'GET audit/runs/run1': {
+    response: { accepted: true, runId: 'run1' },
+    state: {
+      runId: 'run1',
+      state: 'running',
+      sequence: 3,
+      startedAt: epoch() - 90,
+      stageStartedAt: epoch() - 10,
+      ...state,
+    },
+  },
+})
+const currentStep = (label: string) =>
+  document.querySelector(`[aria-label="${label}"] [aria-current="step"]`)?.textContent ?? ''
+
+test('a running scan shows its stage in a stepper and counted progress', async () => {
+  const { screen } = await mount(
+    runningRun({
+      stage: 'scanning',
+      stages: ['validating', 'observing', 'scanning'],
+      progress: { done: 2, total: 4 },
+    }),
+  )
+  const bar = screen.getByRole('progressbar', { name: '機器探索・ポートの進捗' })
+  await expect.element(bar).toHaveAttribute('value', '2')
+  await expect.element(bar).toHaveAttribute('max', '4')
+  await expect.element(screen.getByText('2 / 4 バッチ')).toBeVisible()
+  await expect.element(screen.getByText(/開始から 1:3\d/)).toBeVisible()
+  expect(currentStep('実行の段階')).toContain('機器探索・ポート')
+})
+
+test('the observation window shows elapsed and remaining time', async () => {
+  const { screen } = await mount(
+    runningRun({
+      stage: 'observing',
+      stages: ['validating', 'observing'],
+      progress: { startedAt: epoch() - 60, endsAt: epoch() + 240 },
+    }),
+  )
+  const bar = screen.getByRole('progressbar', { name: '通信観測の進捗' })
+  await expect.element(bar).toHaveAttribute('max', '300')
+  await expect.element(screen.getByText(/残り約 [34]:\d\d/)).toBeVisible()
+})
+
+test('an unaccepted request is shown as waiting, never as running', async () => {
+  const { screen } = await mount({
+    ...diagnosis,
+    'POST audit/runs': { runId: 'run1', requestId: 'r1' },
+    'GET audit/runs/run1': {
+      response: { accepted: null, state: 'pendingAcceptance' },
+      state: null,
+    },
+  })
+  await chooseNic(screen)
+  await screen.getByRole('button', { name: '現地監査を開始' }).click()
+  const bar = screen.getByRole('progressbar', { name: '受付待ちの進捗' })
+  await expect.element(bar).toBeVisible()
+  await expect.element(bar).not.toHaveAttribute('value')
+  expect(currentStep('実行の段階')).toContain('受付')
+})
+
+test('a pending host diagnosis names the job that is running', async () => {
+  const { screen } = await mount({
+    'POST audit/diagnose': { requestId: 'd1' },
+    'GET audit/responses?id=d1': { accepted: null },
+  })
+  await screen.getByRole('button', { name: 'ホスト設定を取得' }).click()
+  await expect.element(screen.getByText('ホスト設定の取得中…')).toBeVisible()
+})
+
+test('adoption shows which of its steps is in progress', async () => {
+  const { screen } = await mount({
+    ...finishedRun,
+    'POST audit/runs/run1/evidence': () => new Promise(() => {}),
+  })
+  await screen.getByRole('checkbox', { name: '192.168.1.42を採用候補に選択' }).click()
+  await screen.getByRole('textbox', { name: '確認者' }).fill('調査者')
+  await screen.getByRole('button', { name: '選択した結果を取り込む' }).click()
+  await expect.poll(() => currentStep('取り込みの段階')).toContain('証跡の転送・封印')
+  await expect.element(screen.getByText('選択した結果の取り込み中…')).toBeVisible()
+})

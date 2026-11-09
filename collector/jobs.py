@@ -6,6 +6,7 @@ import json
 import queue
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -75,6 +76,8 @@ class JobManager:
             "inputHash": content_hash,
             "state": "queued",
             "stage": "validating",
+            "stages": [],
+            "progress": None,
             "sequence": 0,
             "reason": None,
         }
@@ -85,14 +88,16 @@ class JobManager:
         return state
 
     def _work(self, run_id, profile, cancel):
-        self.events.put((run_id, "running", None))
+        def emit(stage, progress=None):
+            # progress: {"done", "total"} for counted work or {"startedAt", "endsAt"} for a window.
+            self.events.put((run_id, "stage", (stage, progress), time.time()))
+
+        self.events.put((run_id, "running", None, time.time()))
         try:
-            result = self.collector(
-                profile, cancel, lambda stage: self.events.put((run_id, "stage", stage))
-            )
-            self.events.put((run_id, "result", result))
+            result = self.collector(profile, cancel, emit)
+            self.events.put((run_id, "result", result, time.time()))
         except Exception as exc:
-            self.events.put((run_id, "failed", str(exc)[:2000]))
+            self.events.put((run_id, "failed", str(exc)[:2000], time.time()))
 
     def cancel(self, run_id):
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", run_id):
@@ -116,12 +121,17 @@ class JobManager:
 
     def tick(self):
         while not self.events.empty():
-            run_id, event, value = self.events.get_nowait()
+            run_id, event, value, when = self.events.get_nowait()
             state = self.states[run_id]
-            if event == "running" and state["state"] != "cancelling":
-                state["state"] = "running"
+            if event == "running":
+                state.setdefault("startedAt", when)
+                if state["state"] != "cancelling":
+                    state["state"] = "running"
             elif event == "stage":
-                state["stage"] = value
+                stage, progress = value
+                state.update(stage=stage, progress=progress, stageStartedAt=when)
+                if stage not in state.setdefault("stages", []):
+                    state["stages"].append(stage)
             elif event == "result":
                 encoded = json.dumps(value, ensure_ascii=False).encode()
                 if len(encoded) > 10 * 1024 * 1024:
@@ -136,7 +146,7 @@ class JobManager:
                         if partial
                         else "completed"
                     )
-                    state["stage"] = "finalized"
+                    state.update(stage="finalized", progress=None)
             elif event == "failed":
                 state.update(
                     state="cancelled" if self.controls[run_id].is_set() else "failed", reason=value
