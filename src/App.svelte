@@ -100,7 +100,12 @@
     }
   }
   function beforeUnload(event: BeforeUnloadEvent) {
-    if (workspace.saveState === 'dirty' || editing || files?.status === 'saving') {
+    if (
+      workspace.saveState === 'dirty' ||
+      editing ||
+      files?.status === 'saving' ||
+      files?.auditBusy
+    ) {
       event.preventDefault()
       event.returnValue = ''
     }
@@ -108,6 +113,12 @@
   function hashChanged() {
     const next = window.location.hash
     if (next === hash) {
+      return
+    }
+    if (files?.auditBusy) {
+      // The import must finish or fail on this screen: leaving would hide its outcome.
+      history.replaceState(null, '', hash || '#/project')
+      notice = '取り込み処理中は画面を移動できません。完了または失敗の表示までお待ちください。'
       return
     }
     if (editing) {

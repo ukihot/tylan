@@ -75,8 +75,11 @@ function Start-AuditOwner {
 function Update-AuditLease {
   $now = Epoch-Time
   if ($script:auditStarted -and $now - $script:auditLastLease -ge 30) {
-    Local-Json (Join-Path $auditIpc 'lease.json') @{ ownerEpoch = $auditEpoch; sessionId = $auditEpoch; time = $now }
-    $script:auditLastLease = $now
+    # Python may be reading the lease at this instant; a refused replace is retried next pass.
+    try {
+      Local-Json (Join-Path $auditIpc 'lease.json') @{ ownerEpoch = $auditEpoch; sessionId = $auditEpoch; time = $now }
+      $script:auditLastLease = $now
+    } catch { }
   }
 }
 function Send-AuditRequest([string]$kind, $payload, [string]$key = '') {
@@ -95,10 +98,13 @@ function Send-AuditRequest([string]$kind, $payload, [string]$key = '') {
 function Audit-Response([string]$id) {
   [void](Check-ID $id)
   if (-not $auditRequests.ContainsKey($id)) { Fail 403 'request belongs to another session' }
-  $ready = Read-Local (Join-Path $auditIpc 'ready.json')
-  if ($ready -and $ready.state -in @('busy', 'failed')) { return @{ accepted = $false; error = (Prop $ready 'error' 'another owner is active'); ownerState = $ready.state } }
   $response = Read-Local (Join-Path $auditIpc "responses\$id.json")
   if ($response) { return $response }
+  $ready = Read-Local (Join-Path $auditIpc 'ready.json')
+  if ($ready -and $ready.state -in @('busy', 'failed', 'stopped')) {
+    $reasons = @{ busy = 'another owner is active'; failed = 'collector owner failed'; stopped = 'collector owner stopped; restart tylan.cmd to audit again (editing still works)' }
+    return @{ accepted = $false; error = (Prop $ready 'error' $reasons[$ready.state]); ownerState = $ready.state }
+  }
   return @{ accepted = $null; state = 'pendingAcceptance'; requestId = $id }
 }
 function Audit-Body($req) {
@@ -200,10 +206,17 @@ function Route-Audit($req) {
     $batches = @($candidate.importBatches | Where-Object { $_.id -eq $id -and $_.state -eq 'applied' })
     if ($candidate.schemaVersion -ne 2 -or $candidate.documentId -notmatch '^doc_[a-zA-Z0-9]{16}$' -or $batches.Count -ne 1) { Fail 400 'invalid import candidate' }
     $batch = $batches[0]
+    # An importId names one run, selection and sealed package: the same id with other content is refused.
+    $run = @($auditRuns.Values | Where-Object { $_.runId -eq $batch.runId })
+    if (-not $run.Count) { Fail 403 'import run is not open in this session' }
+    if ($run[0].siteId -and $run[0].siteId -ne $body.siteId) { Fail 409 'import site differs from its run' }
+    $same = { param($other) $other.runId -eq $batch.runId -and $other.selectionHash -eq $batch.selectionHash -and $other.packageHash -eq $batch.packageHash }
+    if ($auditImports.ContainsKey($id) -and -not (& $same $auditImports[$id])) { Fail 409 'import identity content mismatch' }
+    $recorded = @((Prop (ConvertFrom-Json $utf8.GetString((Read-Canonical $target.Path).Bytes)) 'importBatches' @()) | Where-Object { $_.id -eq $id })
+    if ($recorded.Count -and -not (& $same $recorded[0])) { Fail 409 'import identity differs from the canonical record' }
     $hash = SHA $candidateBytes
     $requestId = Send-AuditRequest 'PrepareEvidence' @{ importId = $id; runId = $batch.runId; siteId = $body.siteId; candidateHash = $hash; intent = @{ documentId = $candidate.documentId; importId = $id; candidateHash = $hash; packageHash = $batch.packageHash; selectionHash = $batch.selectionHash; bindings = $batch.bindings } }
-    $operation = @{ importId = $id; path = $body.path; expect = $body.expect; text = $body.text; candidateHash = $hash; documentId = $candidate.documentId; packageHash = $batch.packageHash; requestId = $requestId; verifyId = ''; state = 'preparing' }
-    if ($auditImports.ContainsKey($id) -and $auditImports[$id].packageHash -ne $operation.packageHash) { Fail 409 'import identity content mismatch' }
+    $operation = @{ importId = $id; path = $body.path; expect = $body.expect; text = $body.text; candidateHash = $hash; documentId = $candidate.documentId; runId = $batch.runId; selectionHash = $batch.selectionHash; packageHash = $batch.packageHash; requestId = $requestId; verifyId = ''; state = 'preparing' }
     $script:auditImports[$id] = $operation
     Local-Json (Join-Path $auditIpc "imports\$id.json") $operation
     return Accepted @{ importId = $id }
@@ -233,16 +246,22 @@ function Route-Audit($req) {
       $target = Resolve-Target $operation.path
       $stamp = Save-Canonical $target $utf8.GetBytes($operation.text) $operation.expect $true
       $operation.state = 'saved'
-      try { Local-Json (Join-Path $auditIpc "imports\$id.json") $operation } catch { [Console]::Out.WriteLine('tylan: import receipt pending; canonical file is authoritative') }
+      try {
+        Fault-Point 'receipt'
+        Local-Json (Join-Path $auditIpc "imports\$id.json") $operation
+      } catch { [Console]::Out.WriteLine('tylan: import receipt pending; canonical file is authoritative') }
+      Fault-Point 'respond'
       return Json @{ lastModified = $stamp; text = $operation.text }
     }
     if ($method -eq 'GET' -and $action -eq 'reconcile') {
       $target = Resolve-Target $operation.path
-      $document = Read-Local $target.Path
-      if (-not $document) { return Json @{ state = 'unknown' } }
+      if (-not [System.IO.File]::Exists($target.Path)) { return Json @{ state = 'unknown' } }
+      $file = Read-Canonical $target.Path
+      $text = $utf8.GetString($file.Bytes)
+      $document = ConvertFrom-Json $text
       if ($document.documentId -ne $operation.documentId) { return Json @{ state = 'conflict' } }
-      $batch = @($document.importBatches | Where-Object { $_.id -eq $id })
-      return Json @{ state = $(if (-not $batch.Count) { 'notApplied' } elseif ($batch[0].packageHash -ne $operation.packageHash) { 'conflict' } else { $batch[0].state }); text = [System.IO.File]::ReadAllText($target.Path, $utf8); lastModified = (Stamp $target.Path) }
+      $batch = @((Prop $document 'importBatches' @()) | Where-Object { $_.id -eq $id })
+      return Json @{ state = $(if (-not $batch.Count) { 'notApplied' } elseif ($batch[0].packageHash -ne $operation.packageHash) { 'conflict' } else { $batch[0].state }); text = $text; lastModified = $file.Stamp }
     }
   }
   Fail 404 'unknown audit operation'

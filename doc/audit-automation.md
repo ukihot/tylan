@@ -1,8 +1,8 @@
 # 現地LAN監査の自動収集・マッピング計画
 
 - 作成日：2026-11-06
-- 文書バージョン：0.2（2026-11-06：ジョブ所有者、経路制限、証跡先行確定・復旧、IPv4中心の対象範囲を具体化）
-- 状態：次期拡張の実装計画。収集機能は未実装。この計画作成ではLAN探索・通信キャプチャを実行していない。
+- 文書バージョン：0.3（2026-11-09：実装・自動検証の対応表を12章に追加）
+- 状態：P0〜P4とP5の一部（スイッチ情報のオフライン取り込み）を実装し、オフラインの自動検証を通過。実LANの探索・キャプチャ、実共有（UNC）での検証は未実施（12.2の現地ゲート）。
 - 前提：[要件定義](requirements.md)、[基本設計](basic-design.md)、[実装・検証記録](implementation.md)、[受入手順](acceptance.md)
 
 ## 1. 目的と既存仕様からの変更
@@ -178,13 +178,13 @@ VLANタグ等を伴う観測点では別の検証済みIPv4フィルターを使
 
 ### 5.1 収集状態と網羅性
 
-| 軸         | 値・記録                                                                                                            |
-| ---------- | ------------------------------------------------------------------------------------------------------------------- |
-| ジョブ状態 | `queued / running / cancelling / completed / partial / failed / cancelled / interrupted`。段階は別属性とする（8.1） |
-| 収集器状態 | `completed / failed / skipped / timedOut / cancelled` と理由。正常終了でも0件はあり得る                             |
-| 観測状態   | `observed / notObserved / unknown`。対象事象を見たか、観測を成立させたかを区別する                                  |
-| 評価       | `finding / noFindingInScope / inconclusive / notApplicable` とルールID・根拠・制約                                  |
-| 監査判定   | 既存の `unchecked / ok / ng / na`。評価から無条件に自動変換しない                                                   |
+| 軸         | 値・記録                                                                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| ジョブ状態 | `queued / running / cancelling / completed / partial / failed / cancelled / interrupted`。段階は別属性とする（8.1）                           |
+| 収集器状態 | `completed / failed / skipped / timedOut / cancelled / truncated` と理由。`truncated` は容量・件数上限での打ち切り。正常終了でも0件はあり得る |
+| 観測状態   | `observed / notObserved / unknown`。対象事象を見たか、観測を成立させたかを区別する                                                            |
+| 評価       | `finding / noFindingInScope / inconclusive / notApplicable` とルールID・根拠・制約                                                            |
+| 監査判定   | 既存の `unchecked / ok / ng / na`。評価から無条件に自動変換しない                                                                             |
 
 範囲は拠点、NIC/観測点、セグメント、対象ホスト、IPファミリー、ポート/プロトコル、期間、除外、未実施・失敗を持つ。ホスト数・走査済み対象数等は実数と分母を表示する。受動観測に「LAN全体の検出率100%」のような数値を作らない。
 
@@ -552,3 +552,45 @@ def test_dhcp_response_not_observed():
 Windows結合・現地試験は独立ゲートとし、モック成功で合格にしない。未導入・未実施のskipは理由付きで一覧化し、正式な現地監査のリリース条件では必要ゲートの未完了を残さない。実機試験は対象範囲・NIC・経路・ツール版・共有条件・実測結果を記録する。
 
 実装段階で各AUTO条件にテストID・実装ファイル・実行結果・現地記録を対応付ける。本計画の作成時点では、その対応表を「テスト成功済み」で埋めない。
+
+## 12. 実装・検証の対応表（2026-11-09）
+
+`bun run verify`（Biome、svelte-check/tsc、Vitest Node・Chromium、Ruff・pytest、ビルド、配布物・契約・E2Eテスト）を通過した時点の対応表。「自動」はオフラインの自動テストで確認済み、「現地」は12.2の現地ゲートが残ることを示す。自動テストの成功を現地ゲートの合格として扱わない。
+
+テストの所在：pytest は `collector/tests/`、TSのCoreは `src/lib/*.test.ts`、画面は `*.svelte.test.ts`（Chromium）、PowerShell契約は `tests/launcher-audit.test.ts`、一連操作は `tests/audit-e2e.test.ts`。
+
+### 12.1 AUTO条件ごとの対応
+
+| ID      | 主な実装                                                                                          | 主な自動テスト                                                                                                             | 状態・未検証事項                                                                 |
+| ------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| AUTO-01 | `audit.ps1` Audit-Info/Start-AuditOwner、`AuditPanel.svelte`、プロファイル保存API                 | `launcher-audit`：Python停止後も保存可、`audit-e2e`：起動〜採用                                                            | 自動。依存不足の文言は一部英語（PowerShell側）。Python未導入PCでの表示は現地確認 |
+| AUTO-02 | `core.authorize_targets`、`runner.validate_profile`、`ipc.decode_request`、セッション照合         | `test_core`（VPN /32・別NIC・除外の生成ケース）、`test_profile`、`test_ipc`、`launcher-audit`（パス脱出・未知run 403）     | 自動。全インターネット遮断下の動作は現地                                         |
+| AUTO-03 | `core.evaluate_dhcp`・`capture_outcome`・`findings_for`（機能OFFは未確認）                        | `test_core`、`test_capture`（0件・権限不足・途中終了・打ち切り・解析失敗）、`test_dns`（OFF）                              | 自動。30秒/5分の実キャプチャ・Npcap権限不足の実出力は現地                        |
+| AUTO-04 | `evaluate_dhcp`（relay・冗長の併記）、ARP複数MACは候補、`planImport` のIP一致は明示照合必須       | `test_capture`（relay/冗長）、`test_core`、`import-plan`（IP一致は照合必須）                                               | 自動。proxy ARP・冗長GW・別VLANの実サンプルは現地                                |
+| AUTO-05 | `core.dns_statistics`・`evaluate_dns`（再送整理、期間末尾、自ホスト別集計、閾値なしは統計のみ）   | `test_dns`（単発NXDOMAIN、SERVFAIL閾値、問い合わせのみ、末尾、自ホスト、観測失敗）                                         | 自動（人工fixture）。実DNS通信のfixture取得は現地                                |
+| AUTO-06 | `normalize_nmap`（filtered・MACなし）、`run-diff.ts`（今回未観測）、収集器状態の表示              | `test_core`、`run-diff.test.ts`、`AuditPanel`（部分完了・ドロップ取得不能）                                                | 自動                                                                             |
+| AUTO-07 | 証跡転送の失敗報告、`tylan.ps1` のパス処理                                                        | `audit-e2e`（日本語・空白を含むローカルパス）、`launcher-audit`（転送失敗）                                                | 一部自動。**UNC・共有切断・権限不足・置換の実機検証は未実施（現地）**            |
+| AUTO-08 | `planImport` の安定ID・再利用、`Save-Canonical`、prepare/commit/reconcile、取り込み中の画面ロック | `import-plan`（重なり・再試行・Undo後の再採用）、`audit-undo`、`launcher-audit`（応答消失・置換失敗）、`App`（画面移動）   | 自動                                                                             |
+| AUTO-09 | `planImport`：接続候補は両端の明示対応付けがある場合だけ採用、MACテーブルは論理接続               | `import-plan`（未対応付けの拒否、物理/論理の区別、所属違いポートの拒否）                                                   | 自動                                                                             |
+| AUTO-10 | 監査は未確認の下書き、確定済みは衝突として採用しない                                              | `audit-e2e`（No.14が未確認・attempted）、既存の監査必須欄テスト                                                            | 自動。確定済み判定との矛盾は衝突メッセージのみで、専用の再確認画面はない         |
+| AUTO-11 | `JobManager.cancel`、`WindowsRun.stop`、`Lease`、容量・期限での停止、部分完了表示                 | `test_jobs`、`test_windows_process`、`test_owner`、`test_capture`（finish_capture）、`AuditPanel`                          | 自動（無害な子孫プロセス）。実Nmap/TSharkの停止は現地                            |
+| AUTO-12 | DTD拒否、TSharkフィールド検証、DNS名の制御文字除去、`CollectionSchema` の上限                     | `test_core`、`test_capture`（不正DNS配布値）、`import-plan`（未知フィールド）、既存の公開テスト                            | 自動                                                                             |
+| AUTO-13 | 公開の許可リスト、DNS名は既定でハッシュ、詳細証跡は保持日数必須                                   | `test_capture`、`test_profile`、`import-plan`（公開射影）、配布物テスト                                                    | 一部自動。証跡共有のACL・保持期限の運用確認は現地                                |
+| AUTO-14 | `compareRuns` の条件差、DHCP/DNS理由文の「不在の証明ではない」                                    | `run-diff.test.ts`、`test_dns`、`test_core`                                                                                | 自動                                                                             |
+| AUTO-15 | 正本の書込は `Save-Canonical` のみ。PythonはHTTP・正本保存を持たない                              | `launcher-audit`（停止後の保存、全採用経路）                                                                               | 自動                                                                             |
+| AUTO-16 | IPC署名・期限、受付前取消、`interrupted` 回収、停止後にleaseを再延長しない                        | `test_ipc`、`test_jobs`、`test_owner`                                                                                      | 自動。PID再利用・Python強制終了の実測は未実施                                    |
+| AUTO-17 | 経路検証（/32・別NIC・等コスト）、実行中の経路監視、`-sT` へ自動変更しない                        | `test_core`（VPN /32・別NIC・等コスト）                                                                                    | 一部自動。**送信NIC・VPN経路・実行中変更・Nmap表示との不一致は現地**             |
+| AUTO-18 | 障害注入点（write/replace/respond/receipt）、証跡コピー・封印の失敗時の後始末                     | `launcher-audit`（各境界）、`test_evidence`（封印失敗・コピー中断）                                                        | 自動。共有上の実障害は現地                                                       |
+| AUTO-19 | Undo後は新importIdで再採用し取消履歴を保持、証跡は削除しない、欠損は同一ハッシュのみ復元          | `import-plan`、`test_evidence`（復元・破損は上書きしない）、`launcher-audit`（欠損→復元）、`audit-e2e`（Undo後も証跡保持） | 自動                                                                             |
+| AUTO-20 | IPv4限定フィルター、IPv6はローカル設定の読取のみ（OFF/失敗は未確認）                              | `test_core`（フィルター）、`test_host_inventory`（実スクリプト）、`launcher-audit`（診断API）、`test_capture`              | 一部自動。**IPv4フィルター・ドロップの実キャプチャ確認は現地**                   |
+| AUTO-21 | `migrateV2`、v1/v2スキーマ、取消履歴、公開射影から取り込み記録を除外                              | `import-plan`、`audit-undo`、`audit-e2e`（v1→v2・archive）                                                                 | 自動                                                                             |
+| AUTO-22 | 本章と [実装・検証記録](implementation.md) のTDD記録                                              | —                                                                                                                          | 記録済み。REDを確認せず追加した回帰テストは区別して記載                          |
+
+### 12.2 現地ゲート（未実施）
+
+次は実機・実共有が必要なため、このリポジトリの自動検証では実施していない。実施時は対象範囲・NIC・経路・ツール版・共有条件・実測結果を [受入手順](acceptance.md#現地監査の受入現地ゲート) の様式で記録する。
+
+1. Nmapの送信NIC・送信元、VPN向け/32・別NIC優先・実行中の経路変更での停止、`nmap --iflist` との突合。
+2. Npcapの権限不足時の表示、TSharkのIPv4フィルター（IPv6 DNS/DHCPv6/NS/NA/RAを取得しない）、ドロップ件数の表示（TShark終了時の集計行の実出力）。
+3. 日本語・空白を含むUNCでの起動・保存・証跡転送、共有切断時のローカル保持、権限不足、`File.Replace` による条件付き置換。
+4. ADのOU読取、DhcpServerモジュールでのスコープ取得、対象Windows端末のCIM読取（権限不足時に他の収集を失わないこと）。

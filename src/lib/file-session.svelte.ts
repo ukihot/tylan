@@ -285,6 +285,9 @@ export function createFileSession(workspace: Workspace, folder: Folder, delay = 
       }),
     /** Saves pending changes first; keeps the file open if that fails so nothing is lost. */
     async close() {
+      if (auditBusy) {
+        return false // an import holds the canonical file until it is confirmed or fails
+      }
       if (workspace.saveState === 'dirty') {
         await flush()
       }

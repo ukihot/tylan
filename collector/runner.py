@@ -7,7 +7,7 @@ import json
 import os
 import shutil
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .core import (
@@ -15,17 +15,45 @@ from .core import (
     TSHARK_FIELDS,
     authorize_targets,
     capture_filter,
+    capture_outcome,
+    complete_lines,
     digest,
-    evaluate_ipv6,
     findings_for,
+    ipv6_finding,
     normalize_nmap,
     normalize_tshark,
     observation,
 )
 from .evidence import sha_file
+from .exports import normalize_switch_export
 from .management import validate_management
 from .route_watcher import RouteWatcher
 from .windows_process import WindowsRun
+
+MAX_RUN_BYTES = 200 * 1024 * 1024
+MAX_OBSERVATIONS = 100000
+
+
+def finish_capture(output, error, code, stopped, segment, limit, keep_names):
+    """Turns TShark's field output and exit summary into observations and a collector record."""
+    observations, omitted, parse_error = [], 0, None
+    if output.strip():
+        try:
+            observations, omitted = normalize_tshark(
+                complete_lines(output) if stopped else output, segment, limit, keep_names
+            )
+        except ValueError as exc:
+            parse_error = str(exc)
+    entry = {
+        "name": "capture",
+        **capture_outcome(code, error, stopped, len(observations), parse_error),
+        "rows": len(observations),
+        "omitted": omitted,
+    }
+    if omitted and entry["state"] == "completed":
+        entry.update(state="truncated", reason=f"観測上限で{omitted}行を集計していません")
+    return observations, entry
+
 
 FEATURES = {"arp", "dns", "dhcp", "ipv6Local", "discovery", "ports"}
 DEFAULT_PORTS = [22, 53, 80, 135, 139, 443, 445, 515, 631, 3389, 5985, 5986, 8080, 8443, 9100]
@@ -49,6 +77,10 @@ PROFILE_KEYS = {
     "approvedPlanHash",
     "management",
     "serviceDetection",
+    "expectedGateway",
+    "dnsFailureRatio",
+    "detailEvidence",
+    "switchExport",
 }
 
 
@@ -64,8 +96,21 @@ def validate_profile(value):
         "features": {key: True for key in FEATURES},
         **value,
     }
-    if profile["mode"] not in ("standard", "passive", "detail"):
+    if profile["mode"] not in ("standard", "passive", "detail", "offline"):
         raise ValueError("unknown mode")
+    if ("switchExport" in profile) != (profile["mode"] == "offline"):
+        raise ValueError("switch exports are imported only as an offline run")
+    if profile["mode"] == "offline":
+        # Reading a file sends nothing: no NIC, targets or remote readers may ride along.
+        if (
+            profile["cidrs"]
+            or profile.get("management")
+            or not isinstance(profile.get("siteId"), str)
+        ):
+            raise ValueError("offline import takes only a site and a switch export")
+        normalize_switch_export(
+            profile["switchExport"], profile["siteId"], "1970-01-01T09:00:00+09:00"
+        )
     if not isinstance(profile["features"], dict) or set(profile["features"]) - FEATURES:
         raise ValueError("unknown feature")
     profile["features"] = {key: profile["features"].get(key, False) for key in FEATURES}
@@ -84,7 +129,7 @@ def validate_profile(value):
             raise ValueError("invalid ranges")
         for network in profile[key]:
             ipaddress.IPv4Network(network, strict=False)
-    if profile["mode"] != "passive":
+    if profile["mode"] in ("standard", "detail"):
         ipaddress.IPv4Address(profile["source"])
         if (
             type(profile.get("ifIndex")) is not int
@@ -92,18 +137,33 @@ def validate_profile(value):
             or not profile["cidrs"]
         ):
             raise ValueError("select NIC and IPv4 scope")
-    for key in ("approvedDhcp", "expectedDns"):
+    for key in ("approvedDhcp", "expectedDns", "expectedGateway"):
         if key in profile and profile[key] is not None:
             if not isinstance(profile[key], list) or len(profile[key]) > 100:
                 raise ValueError("invalid baseline")
             for address in profile[key]:
                 ipaddress.IPv4Address(address)
+    ratio = profile.get("dnsFailureRatio")
+    if ratio is not None and (type(ratio) not in (int, float) or not 0 < ratio <= 1):
+        raise ValueError("DNS failure threshold must be a ratio above 0 and up to 1")
+    detail = profile.get("detailEvidence")
+    if detail is not None and (
+        not isinstance(detail, dict)
+        or set(detail) != {"dnsNames", "retentionDays"}
+        or type(detail["dnsNames"]) is not bool
+        or type(detail["retentionDays"]) is not int
+        or not 1 <= detail["retentionDays"] <= 3650
+    ):
+        raise ValueError("detailed evidence needs dnsNames and a retention period of 1-3650 days")
     if profile.get("management") and profile["mode"] != "detail":
         raise ValueError("remote management requires detail approval")
-    if profile.get('management'):
-        validate_management(profile['management'])
-    if 'serviceDetection' in profile and (type(profile['serviceDetection']) is not bool or (profile['serviceDetection'] and profile['mode'] != 'detail')):
-        raise ValueError('service detection requires detailed approval')
+    if profile.get("management"):
+        validate_management(profile["management"])
+    if "serviceDetection" in profile and (
+        type(profile["serviceDetection"]) is not bool
+        or (profile["serviceDetection"] and profile["mode"] != "detail")
+    ):
+        raise ValueError("service detection requires detailed approval")
     return profile
 
 
@@ -172,11 +232,13 @@ def execution_plan(value, inventory):
         for key in sorted(profile)
         if key not in ("executionPlanHash", "approvedPlanHash")
     }
-    management = validate_management(profile.get('management', {}))
-    if management['targets']:
-        authorized = authorize_targets({**profile, 'cidrs': [ip + '/32' for ip in management['targets']]}, routes)
-        if authorized != management['targets']:
-            raise ValueError('management target is excluded or is the local host')
+    management = validate_management(profile.get("management", {}))
+    if management["targets"]:
+        authorized = authorize_targets(
+            {**profile, "cidrs": [ip + "/32" for ip in management["targets"]]}, routes
+        )
+        if authorized != management["targets"]:
+            raise ValueError("management target is excluded or is the local host")
     plan = {
         "targets": targets,
         "routes": routes,
@@ -185,7 +247,7 @@ def execution_plan(value, inventory):
         "ports": profile["ports"],
         "mode": profile["mode"],
         "options": options,
-        'managementTargets': management['targets'],
+        "managementTargets": management["targets"],
     }
     return {**plan, "hash": digest(plan)}
 
@@ -195,6 +257,9 @@ class Collector:
         self.root = Path(run_root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.sequence = 0
+
+    def run_bytes(self):
+        return sum(f.stat().st_size for f in self.root.rglob("*") if f.is_file())
 
     def __call__(self, value, cancelled, emit):
         profile = validate_profile(value)
@@ -218,6 +283,9 @@ class Collector:
                 if stdout.stat().st_size + stderr.stat().st_size > 10 * 1024 * 1024:
                     job.stop()
                     raise ValueError("tool output exceeds limit")
+                if self.run_bytes() > MAX_RUN_BYTES:
+                    job.stop()
+                    raise ValueError("run directory exceeds 200MiB")
                 time.sleep(0.05)
             code = job.poll(handle)
             if code:
@@ -262,8 +330,8 @@ class Collector:
                     "-Output",
                     str(output),
                 ]
-                if profile['features']['ipv6Local']:
-                    args += ['-IncludeIPv6']
+                if profile["features"]["ipv6Local"]:
+                    args += ["-IncludeIPv6"]
                 if targets:
                     ip_file = self.root / "route-targets.txt"
                     ip_file.write_text("\n".join(targets), encoding="utf-8")
@@ -292,7 +360,7 @@ class Collector:
                 )
             )
             collectors.append({"name": "local", "state": "completed", "reason": None})
-            if profile["features"]["ipv6Local"]:
+            if inventory.get("ipv6", {}).get("state") == "completed":
                 ipv6_addresses = [a for a in inventory["addresses"] if a["family"] == "IPv6"]
                 ipv6_routes = [
                     r
@@ -323,7 +391,7 @@ class Collector:
             tshark_filter = capture_filter(
                 profile["features"]["arp"], profile["features"]["dns"], profile["features"]["dhcp"]
             )
-            capture_started = None
+            capture_started = capture_wall = capture_interface = None
             if paths["tshark"] and tshark_filter:
                 try:
                     fields = command(job, [paths["tshark"], "-G", "fields"], "fields", 60)
@@ -361,7 +429,8 @@ class Collector:
                     for field in TSHARK_FIELDS:
                         args += ["-e", field]
                     capture = job.spawn(args, capture_output, capture_error)
-                    capture_started = time.monotonic()
+                    capture_started, capture_wall = time.monotonic(), time.time()
+                    capture_interface = matches[0]
                 except Exception as exc:
                     collectors.append({"name": "capture", "state": "failed", "reason": str(exc)})
             else:
@@ -441,8 +510,12 @@ class Collector:
                                         ",".join(map(str, profile["ports"])),
                                     ]
                                 )
-                                if profile['mode'] == 'detail' and profile.get('serviceDetection') and phase == 'ports':
-                                    args += ['-sV', '--version-light']
+                                if (
+                                    profile["mode"] == "detail"
+                                    and profile.get("serviceDetection")
+                                    and phase == "ports"
+                                ):
+                                    args += ["-sV", "--version-light"]
                                 command(job, args + batch, "nmap", 10, watcher.changed)
                                 observations.extend(
                                     normalize_nmap(
@@ -469,93 +542,173 @@ class Collector:
                     )
             else:
                 collectors.append({"name": "nmap", "state": "skipped", "reason": "能動収集OFF"})
+            capture_end = None
             if capture:
-                while (
-                    job.poll(capture) is None
-                    and not cancelled.is_set()
-                    and time.monotonic() < deadline
-                ):
-                    if (
+                stopped = None
+                while job.poll(capture) is None:
+                    if cancelled.is_set():
+                        stopped = "cancelled"
+                    elif time.monotonic() >= deadline:
+                        stopped = "deadline"
+                    elif (
                         capture_output.stat().st_size + capture_error.stat().st_size
                         > 10 * 1024 * 1024
+                        or self.run_bytes() > MAX_RUN_BYTES
                     ):
+                        stopped = "capacity"
+                    if stopped:
+                        job.stop()
                         break
                     time.sleep(0.1)
-                success = job.poll(capture) == 0
-                if not success:
-                    job.stop()
-                try:
-                    observations.extend(
-                        normalize_tshark(
-                            capture_output.read_text(encoding="utf-8"),
-                            profile.get("siteId", "local"),
-                        )
-                    )
-                    collectors.append(
-                        {
-                            "name": "capture",
-                            "state": "completed" if success else "timedOut",
-                            "reason": None if success else "観測途中終了",
-                            "seconds": round(time.monotonic() - capture_started, 1),
-                            "dropped": None,
-                        }
-                    )
-                except Exception as exc:
-                    collectors.append({"name": "capture", "state": "failed", "reason": str(exc)})
+                capture_end = time.time()
+                captured, entry = finish_capture(
+                    capture_output.read_text(encoding="utf-8", errors="replace"),
+                    capture_error.read_text(encoding="utf-8", errors="replace")[-20000:],
+                    job.poll(capture),
+                    stopped,
+                    profile.get("siteId", "local"),
+                    MAX_OBSERVATIONS - len(observations),
+                    bool(profile.get("detailEvidence", {}).get("dnsNames")),
+                )
+                observations.extend(captured)
+                collectors.append(
+                    {
+                        **entry,
+                        "interface": capture_interface,
+                        "filter": tshark_filter,
+                        "startedEpoch": capture_wall,
+                        "endedEpoch": capture_end,
+                        "seconds": round(time.monotonic() - capture_started, 1),
+                    }
+                )
                 # Raw question names were transient extraction data, never evidence.
                 capture_output.unlink(missing_ok=True)
-            if profile.get('management'):
-                management = validate_management(profile['management'])
+            if profile.get("management"):
+                management = validate_management(profile["management"])
                 requests = []
-                if management.get('ad'):
-                    requests.append({'kind': 'ad', **management['ad']})
-                requests += [{'kind': 'dhcp', 'server': address} for address in management.get('dhcpServers', [])]
-                requests += [{'kind': 'windows', 'server': address} for address in management.get('windows', [])]
-                emit('management')
+                if management.get("ad"):
+                    requests.append({"kind": "ad", **management["ad"]})
+                requests += [
+                    {"kind": "dhcp", "server": address}
+                    for address in management.get("dhcpServers", [])
+                ]
+                requests += [
+                    {"kind": "windows", "server": address}
+                    for address in management.get("windows", [])
+                ]
+                emit("management")
                 with RouteWatcher() as watcher:
                     for request in requests:
                         try:
-                            current = local([request['server']])
-                            if execution_plan(profile, current)['hash'] != plan_hash or watcher.changed.is_set():
-                                raise ValueError('management route approval changed')
-                            if len(current['bestRoutes']) != 1 or current['bestRoutes'][0]['source'] != profile['source'] or current['bestRoutes'][0]['ifIndex'] != profile['ifIndex']:
-                                raise ValueError('management OS path mismatch')
-                            input_path = self.root / ('management-' + digest(request) + '.json')
-                            output_path = self.root / ('management-' + digest(request) + '-result.json')
-                            input_path.write_text(json.dumps(request), encoding='utf-8')
-                            command(job, [paths['powershell'], '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(Path(__file__).with_name('collect-management.ps1')), '-InputFile', str(input_path), '-Output', str(output_path)], 'management', 60, watcher.changed)
+                            current = local([request["server"]])
+                            if (
+                                execution_plan(profile, current)["hash"] != plan_hash
+                                or watcher.changed.is_set()
+                            ):
+                                raise ValueError("management route approval changed")
+                            if (
+                                len(current["bestRoutes"]) != 1
+                                or current["bestRoutes"][0]["source"] != profile["source"]
+                                or current["bestRoutes"][0]["ifIndex"] != profile["ifIndex"]
+                            ):
+                                raise ValueError("management OS path mismatch")
+                            input_path = self.root / ("management-" + digest(request) + ".json")
+                            output_path = self.root / (
+                                "management-" + digest(request) + "-result.json"
+                            )
+                            input_path.write_text(json.dumps(request), encoding="utf-8")
+                            command(
+                                job,
+                                [
+                                    paths["powershell"],
+                                    "-NoProfile",
+                                    "-ExecutionPolicy",
+                                    "Bypass",
+                                    "-File",
+                                    str(Path(__file__).with_name("collect-management.ps1")),
+                                    "-InputFile",
+                                    str(input_path),
+                                    "-Output",
+                                    str(output_path),
+                                ],
+                                "management",
+                                60,
+                                watcher.changed,
+                            )
                             if output_path.stat().st_size > 10 * 1024 * 1024:
-                                raise ValueError('management result too large')
-                            data = json.loads(output_path.read_text(encoding='utf-8-sig'))
-                            collectors.append({'name': 'management-' + request['kind'] + '-' + request['server'], 'state': data['state'], 'reason': data['reason']})
-                            kind = {'ad': 'adComputer', 'dhcp': 'dhcpScope', 'windows': 'hostConfiguration'}[request['kind']]
-                            for record in data['records']:
-                                when = datetime.now(JST).isoformat(timespec='seconds')
-                                observations.append(observation(kind, 'powershell-management', profile.get('siteId', 'local'), when, record))
-                                if request['kind'] == 'windows':
-                                    for address in record['addresses']:
+                                raise ValueError("management result too large")
+                            data = json.loads(output_path.read_text(encoding="utf-8-sig"))
+                            collectors.append(
+                                {
+                                    "name": "management-"
+                                    + request["kind"]
+                                    + "-"
+                                    + request["server"],
+                                    "state": data["state"],
+                                    "reason": data["reason"],
+                                }
+                            )
+                            kind = {
+                                "ad": "adComputer",
+                                "dhcp": "dhcpScope",
+                                "windows": "hostConfiguration",
+                            }[request["kind"]]
+                            for record in data["records"]:
+                                when = datetime.now(JST).isoformat(timespec="seconds")
+                                observations.append(
+                                    observation(
+                                        kind,
+                                        "powershell-management",
+                                        profile.get("siteId", "local"),
+                                        when,
+                                        record,
+                                    )
+                                )
+                                if request["kind"] == "windows":
+                                    for address in record["addresses"]:
                                         if ipaddress.ip_address(address).version == 4:
-                                            observations.append(observation('device', 'powershell-management', profile.get('siteId', 'local'), when, {'ip': address, 'mac': record['mac'].lower() if record['mac'] else None, 'hostname': record['server'], 'ports': [], 'assignmentMode': 'dhcp' if record['dhcpEnabled'] else 'static'}))
+                                            observations.append(
+                                                observation(
+                                                    "device",
+                                                    "powershell-management",
+                                                    profile.get("siteId", "local"),
+                                                    when,
+                                                    {
+                                                        "ip": address,
+                                                        "mac": record["mac"].lower()
+                                                        if record["mac"]
+                                                        else None,
+                                                        "hostname": record["server"],
+                                                        "ports": [],
+                                                        "assignmentMode": "dhcp"
+                                                        if record["dhcpEnabled"]
+                                                        else "static",
+                                                    },
+                                                )
+                                            )
                         except Exception as exc:
-                            collectors.append({'name': 'management-' + request['kind'], 'state': 'failed', 'reason': str(exc)})
+                            collectors.append(
+                                {
+                                    "name": "management-" + request["kind"],
+                                    "state": "failed",
+                                    "reason": str(exc),
+                                }
+                            )
                             if watcher.changed.is_set() or cancelled.is_set():
                                 break
-            capture_succeeded = any(
-                c["name"] == "capture" and c["state"] == "completed" for c in collectors
+            capture_state = next(
+                (c["state"] for c in collectors if c["name"] == "capture"), "skipped"
             )
-            findings = findings_for(observations, capture_succeeded, profile.get("approvedDhcp"))
-            if profile["features"]["ipv6Local"]:
-                evaluation = evaluate_ipv6(ipv6_addresses, ipv6_routes, True)
-                findings.append(
-                    {
-                        "id": "ipv6-local-v1",
-                        "itemNo": 12,
-                        **evaluation.to_dict(),
-                        "observationIds": [
-                            o["id"] for o in observations if o["type"] == "ipv6Configuration"
-                        ],
-                    }
-                )
+            findings = findings_for(
+                observations,
+                {"succeeded": capture_state in ("completed", "truncated"), "endEpoch": capture_end},
+                profile,
+            )
+            ipv6 = ipv6_finding(profile["features"]["ipv6Local"], inventory)
+            ipv6["observationIds"] = [
+                o["id"] for o in observations if o["type"] == "ipv6Configuration"
+            ]
+            findings.append(ipv6)
             emit("finalizing")
             return {
                 "format": "tylan-collection",
@@ -571,6 +724,16 @@ class Collector:
                     "observationPoint": "host",
                     "ipv6Capture": False,
                     "ipv6Scan": False,
+                    "ipv6Local": inventory.get("ipv6"),
+                    "detailEvidence": profile.get("detailEvidence"),
+                    "retainUntil": (
+                        datetime.now(JST)
+                        + timedelta(days=profile["detailEvidence"]["retentionDays"])
+                    )
+                    .date()
+                    .isoformat()
+                    if profile.get("detailEvidence")
+                    else None,
                 },
                 "collectors": collectors,
                 "observations": observations,

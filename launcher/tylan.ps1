@@ -58,7 +58,39 @@ function SHA([byte[]]$bytes) {
   $hash = [System.Security.Cryptography.SHA256]::Create()
   try { -join ($hash.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) } finally { $hash.Dispose() }
 }
-function Stamp([string]$path) { [System.IO.File]::GetLastWriteTimeUtc($path).Ticks.ToString() + ':' + (SHA ([System.IO.File]::ReadAllBytes($path))) }
+# One consistent read: the bytes and their stamp describe the same version, and writers are
+# excluded while reading. A file that keeps changing is reported busy (409), never torn.
+function Read-Canonical([string]$path) {
+  for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    try {
+      $before = [System.IO.File]::GetLastWriteTimeUtc($path).Ticks
+      $stream = New-Object System.IO.FileStream($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+      try {
+        $bytes = New-Object byte[] $stream.Length
+        $read = 0
+        while ($read -lt $bytes.Length) {
+          $n = $stream.Read($bytes, $read, $bytes.Length - $read)
+          if ($n -le 0) { break }
+          $read += $n
+        }
+      } finally { $stream.Dispose() }
+      if ($read -eq $bytes.Length -and [System.IO.File]::GetLastWriteTimeUtc($path).Ticks -eq $before) {
+        return @{ Bytes = $bytes; Stamp = $before.ToString() + ':' + (SHA $bytes) }
+      }
+    } catch [System.IO.IOException] { }
+    Start-Sleep -Milliseconds 25
+  }
+  Fail 409 'file is being changed elsewhere; try again'
+}
+function Stamp([string]$path) { (Read-Canonical $path).Stamp }
+# Offline acceptance tests only (-AuditFixture): fail one named share boundary once.
+$script:faultPoint = ''
+function Fault-Point([string]$name) {
+  if ($script:faultPoint -eq $name) {
+    $script:faultPoint = ''
+    Fail 500 "injected fault: $name"
+  }
+}
 function Resolve-Target($rel) {
   $rel = [string]$rel
   $i = $rel.LastIndexOf('/')
@@ -86,7 +118,7 @@ function Save-Canonical($target, [byte[]]$bytes, [string]$expect, [bool]$importi
     if ($bytes.Length -gt 10MB) { Fail 413 'canonical JSON exceeds 10MiB' }
     $candidate = ConvertFrom-Json $utf8.GetString($bytes)
     if ((Prop $candidate 'schemaVersion') -eq 2 -and $exists -and -not $importing) {
-      $previous = ConvertFrom-Json ([System.IO.File]::ReadAllText($target.Path, $utf8))
+      $previous = ConvertFrom-Json $utf8.GetString((Read-Canonical $target.Path).Bytes)
       $oldBatches = @(Prop $previous 'importBatches' @())
       foreach ($batch in @(Prop $candidate 'importBatches' @())) {
         $old = @($oldBatches | Where-Object { $_.id -eq $batch.id })
@@ -96,6 +128,7 @@ function Save-Canonical($target, [byte[]]$bytes, [string]$expect, [bool]$importi
     }
   }
   [void][System.IO.Directory]::CreateDirectory($target.Folder)
+  Fault-Point 'write'
   $tmp = "$($target.Path).$([guid]::NewGuid().ToString('N')).tmp"
   [System.IO.File]::WriteAllBytes($tmp, $bytes)
   # Keep a failed candidate for diagnosis. Never copy over a canonical file on replace failure.
@@ -103,6 +136,7 @@ function Save-Canonical($target, [byte[]]$bytes, [string]$expect, [bool]$importi
     if ((SHA ([System.IO.File]::ReadAllBytes($tmp))) -ne (SHA $bytes)) { Fail 500 'temporary verification failed' }
     $current = if ([System.IO.File]::Exists($target.Path)) { Stamp $target.Path } else { 'new' }
     if ($current -ne $before) { Fail 409 'changed during save preparation' }
+    Fault-Point 'replace'
     if ([System.IO.File]::Exists($target.Path)) {
       $archive = Join-Path $Root 'archive'
       [void][System.IO.Directory]::CreateDirectory($archive)
@@ -111,8 +145,9 @@ function Save-Canonical($target, [byte[]]$bytes, [string]$expect, [bool]$importi
     } else {
       [System.IO.File]::Move($tmp, $target.Path)
     }
-    if ((SHA ([System.IO.File]::ReadAllBytes($target.Path))) -ne (SHA $bytes)) { Fail 503 'saveUnknown: canonical verification differs' }
-    return Stamp $target.Path
+    $saved = Read-Canonical $target.Path
+    if ((SHA $saved.Bytes) -ne (SHA $bytes)) { Fail 503 'saveUnknown: canonical verification differs' }
+    return $saved.Stamp
   } catch { throw }
 }
 
@@ -171,6 +206,10 @@ function Route($req) {
     return Reply 200 'text/html; charset=utf-8' ([System.IO.File]::ReadAllBytes($editor))
   }
   if ($req.Headers['x-tylan-token'] -ne $token) { Fail 403 'missing token' }
+  if ($AuditFixture -and $req.Method -eq 'POST' -and $req.Path -eq '/api/test/fault') {
+    $script:faultPoint = [string]$req.Query['point']
+    return Reply 204 'text/plain' (New-Object byte[] 0)
+  }
   if ($req.Path.StartsWith('/api/audit/') -or $req.Path.StartsWith('/api/imports')) { return Route-Audit $req }
   switch ("$($req.Method) $($req.Path)") {
     'GET /api/info' { return Json ([ordered]@{ root = $Root; audit = (Audit-Info) }) }
@@ -188,7 +227,8 @@ function Route($req) {
     'GET /api/file' {
       $t = Resolve-Target $req.Query['path']
       if (-not [System.IO.File]::Exists($t.Path)) { Fail 404 'not found' }
-      return Reply 200 'text/plain; charset=utf-8' ([System.IO.File]::ReadAllBytes($t.Path)) @{ 'X-Last-Modified' = (Stamp $t.Path) }
+      $file = Read-Canonical $t.Path
+      return Reply 200 'text/plain; charset=utf-8' $file.Bytes @{ 'X-Last-Modified' = $file.Stamp }
     }
     'PUT /api/file' {
       # expect: the lastModified the editor last saw, 'new' (must not exist) or 'any' (overwrite).

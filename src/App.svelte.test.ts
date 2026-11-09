@@ -158,3 +158,60 @@ test('JSONを握るまで編集不可。変更はworkingへ自動保存され、
   expect(fake.files.get('working/network-next.json')!.text).toContain('本社ビル')
   expect(fake.files.get(path)!.text).toBe(before)
 })
+
+test('取り込み処理中は画面移動とページ終了を止める', async () => {
+  window.location.hash = '#/project'
+  const fake = memoryFolder()
+  await fake.folder.write('working/network.json', JSON.stringify(fixture()), 'new')
+  let sealing = false
+  const result = {
+    format: 'tylan-collection',
+    schemaVersion: 1,
+    runId: 'run1',
+    profile: {},
+    tools: {},
+    scope: {},
+    startedAt: NOW,
+    endedAt: NOW,
+    collectors: [],
+    findings: [],
+    observations: [
+      {
+        id: 'printer',
+        type: 'device',
+        source: 'synthetic',
+        segment: 'site',
+        observedAt: NOW,
+        value: { ip: '192.168.1.42', mac: '00:11:22:33:44:55', ports: [] },
+      },
+    ],
+  }
+  const replies: Record<string, unknown> = {
+    'audit/runs': [{ runId: 'run1' }],
+    'audit/runs/run1': {
+      response: { accepted: true, runId: 'run1' },
+      state: { runId: 'run1', state: 'completed', stage: 'finalized', sequence: 1 },
+    },
+    'audit/runs/run1/result': result,
+  }
+  fake.folder.audit = async (_method, path) => {
+    if (path === 'audit/runs/run1/evidence') {
+      sealing = true
+      return new Promise(() => {}) // the share stalls while the import holds the file
+    }
+    return replies[path] ?? []
+  }
+  const screen = await render(App, { folder: fake.folder })
+  await screen.getByRole('button', { name: 'network.json を開く' }).click()
+  await screen.getByRole('link', { name: '監査', exact: true }).click()
+  await screen.getByRole('checkbox', { name: '192.168.1.42を採用候補に選択' }).click()
+  await screen.getByRole('textbox', { name: '確認者' }).fill('調査者')
+  await screen.getByRole('button', { name: '選択した結果を取り込む' }).click()
+  await expect.poll(() => sealing).toBe(true)
+  await screen.getByRole('link', { name: '機器・資産台帳', exact: true }).click()
+  await expect.element(screen.getByText(/取り込み処理中は画面を移動できません/)).toBeVisible()
+  expect(window.location.hash).toBe('#/audit')
+  const unload = new Event('beforeunload', { cancelable: true })
+  window.dispatchEvent(unload)
+  expect(unload.defaultPrevented).toBe(true)
+})

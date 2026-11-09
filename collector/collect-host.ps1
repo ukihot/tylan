@@ -1,21 +1,36 @@
 # Fixed, read-only local inventory. Never enables WinRM, changes routes or renews DHCP.
+# IPv6 is a separate, send-free read: its failure leaves IPv6 unchecked and IPv4 collection intact.
 param([Parameter(Mandatory=$true)][string]$Output, [string]$Targets = '', [switch]$IncludeIPv6)
 $ErrorActionPreference = 'Stop'
-$families = @('IPv4')
-if ($IncludeIPv6) { $families += 'IPv6' }
+function Address-Dto($a) {
+  [ordered]@{ ifIndex = [int]$a.InterfaceIndex; address = $a.IPAddress; prefixLength = [int]$a.PrefixLength; family = $a.AddressFamily.ToString(); state = $a.AddressState.ToString(); origin = $a.PrefixOrigin.ToString(); skipAsSource = [bool]$a.SkipAsSource }
+}
+function Route-Dtos([string]$family) {
+  $interfaces = @(Get-NetIPInterface -AddressFamily $family)
+  @(Get-NetRoute -AddressFamily $family | ForEach-Object {
+    $r = $_
+    $metric = @($interfaces | Where-Object { $_.InterfaceIndex -eq $r.InterfaceIndex } | Select-Object -First 1)
+    $interfaceMetric = if ($metric.Count) { [int]$metric[0].InterfaceMetric } else { 0 }
+    [ordered]@{ prefix = $r.DestinationPrefix; ifIndex = [int]$r.InterfaceIndex; nextHop = $r.NextHop; metric = [int]$r.RouteMetric + $interfaceMetric; family = $r.AddressFamily.ToString(); protocol = $r.Protocol.ToString(); validLifetime = $r.ValidLifetime.ToString() }
+  })
+}
 $adapters = @(Get-NetAdapter | ForEach-Object {
   [ordered]@{ ifIndex = [int]$_.ifIndex; guid = $_.InterfaceGuid.ToString(); name = $_.Name; description = $_.InterfaceDescription; mac = $_.MacAddress.Replace('-', ':').ToLowerInvariant(); status = $_.Status.ToString(); hardware = [bool]$_.HardwareInterface }
 })
-$addresses = @(Get-NetIPAddress -AddressFamily $families | ForEach-Object {
-  [ordered]@{ ifIndex = [int]$_.InterfaceIndex; address = $_.IPAddress; prefixLength = [int]$_.PrefixLength; family = $_.AddressFamily.ToString(); state = $_.AddressState.ToString(); origin = $_.PrefixOrigin.ToString(); skipAsSource = [bool]$_.SkipAsSource }
-})
-$interfaces = @(Get-NetIPInterface -AddressFamily $families)
-$routes = @(Get-NetRoute -AddressFamily $families | ForEach-Object {
-  $r = $_
-  $metric = @($interfaces | Where-Object { $_.InterfaceIndex -eq $r.InterfaceIndex -and $_.AddressFamily -eq $r.AddressFamily } | Select-Object -First 1)
-  $interfaceMetric = if ($metric.Count) { [int]$metric[0].InterfaceMetric } else { 0 }
-  [ordered]@{ prefix = $r.DestinationPrefix; ifIndex = [int]$r.InterfaceIndex; nextHop = $r.NextHop; metric = [int]$r.RouteMetric + $interfaceMetric; family = $r.AddressFamily.ToString(); protocol = $r.Protocol.ToString(); validLifetime = $r.ValidLifetime.ToString() }
-})
+$addresses = @(Get-NetIPAddress -AddressFamily IPv4 | ForEach-Object { Address-Dto $_ })
+$routes = @(Route-Dtos 'IPv4')
+$ipv6 = [ordered]@{ state = 'skipped'; reason = 'IPv6 local check OFF' }
+if ($IncludeIPv6) {
+  try {
+    $v6Addresses = @(Get-NetIPAddress -AddressFamily IPv6 | ForEach-Object { Address-Dto $_ })
+    $v6Routes = @(Route-Dtos 'IPv6')
+    $addresses += $v6Addresses
+    $routes += $v6Routes
+    $ipv6 = [ordered]@{ state = 'completed'; reason = $null }
+  } catch {
+    $ipv6 = [ordered]@{ state = 'failed'; reason = $_.Exception.Message }
+  }
+}
 $best = @()
 if ($Targets) {
   $ips = @(Get-Content -LiteralPath $Targets -Encoding UTF8)
@@ -38,5 +53,5 @@ $dhcp = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=T
 })
 $neighbors = @(Get-NetNeighbor -AddressFamily IPv4 | ForEach-Object { [ordered]@{ ifIndex = [int]$_.InterfaceIndex; ip = $_.IPAddress; mac = $_.LinkLayerAddress.Replace('-', ':').ToLowerInvariant(); state = $_.State.ToString() } })
 $domain = Get-CimInstance Win32_ComputerSystem -Property Domain,PartOfDomain,Name
-$result = [ordered]@{ adapters = $adapters; addresses = $addresses; routes = $routes; bestRoutes = $best; dns = $dns; dhcp = $dhcp; neighbors = $neighbors; computer = [ordered]@{ name = $domain.Name; domain = $domain.Domain; domainJoined = [bool]$domain.PartOfDomain } }
+$result = [ordered]@{ adapters = $adapters; addresses = $addresses; routes = $routes; ipv6 = $ipv6; bestRoutes = $best; dns = $dns; dhcp = $dhcp; neighbors = $neighbors; computer = [ordered]@{ name = $domain.Name; domain = $domain.Domain; domainJoined = [bool]$domain.PartOfDomain } }
 [System.IO.File]::WriteAllText($Output, (ConvertTo-Json -InputObject $result -Depth 12 -Compress), (New-Object System.Text.UTF8Encoding($false)))

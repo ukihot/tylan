@@ -23,8 +23,11 @@ bun run lint:fix      # 安全な自動修正
 bun run check         # Svelte・TypeScriptの型検査
 bun run test          # Vitest：Nodeと実Chromium
 bun run test:watch    # TDD用の監視実行
-bun run verify        # 上記検査＋ビルド＋file://配布物テスト
+bun run test:collector # Ruff・pytest（収集器。.venvに collector/requirements-dev.txt を導入）
+bun run verify        # 上記検査＋ビルド＋file://配布物・PowerShell契約・監査E2Eテスト
 ```
+
+収集器のテストは実LANへ送信しません。監査E2Eは配布物のランチャーと実際の収集所有者を、固定の疑似収集結果で動かします（実行にはWindows PowerShellとPython 3.12が必要）。
 
 Biome 2.6.5でSvelte・HTML全体の対応を有効にしています。この機能はBiome公式でも実験的扱いのため、型チェックとブラウザーテストを併用します。VS Code用の拡張推奨・保存時整形も設定済みです。
 
@@ -43,12 +46,28 @@ bun run build
 
 ビルドは `dist/SHA256SUMS.txt` と `dist/THIRD-PARTY-LICENSES.txt` も生成します。閲覧用雛形は `.build/viewer/` に置き、編集用HTMLへ内包します。
 
+## 現地監査（調査用ホスト）
+
+監査画面の「現地LANを調べる」から、調査用のWindowsホストでIPv4の機器探索・指定TCPポート・ARP/DNS/DHCP観測と自ホスト設定（IPv6は送信なしの設定読取のみ）を収集し、選択した結果を同じ正本JSONへ取り込みます。Pythonがない通常PCでも、編集・閲覧はこれまでどおり使えます。
+
+配布：`bun run build` の `dist/` から `editor.html`・`tylan.cmd`・`tylan.ps1`・`audit.ps1`・`collector/` を共有の `tools/` に置きます（`SHA256SUMS.txt` に収集器も含まれます）。調査用ホストだけに、Python 3.12（`python.exe` がPATH上）、Nmap、Wireshark（TShark）とNpcapを用意します。アプリは未導入のソフトを自動でインストールしません。
+
+1. `tylan.cmd` で起動し、今回のJSONを開いて「監査」画面へ移動します。
+2. 「ホスト設定を取得」で調査用NICと送信元IPv4を選びます。対象CIDR・除外・ポート・承認DHCP・想定DNS/GWを確認します（空欄の基準は「基準未設定」になり、問題なしの根拠に使いません）。詳細調査は「経路と対象を確認」で表示した経路を承認してから開始します。
+3. 「現地監査を開始」。受付・実行中・部分完了・失敗を区別して表示します。「監査を中止」で収集プロセスを停止します。
+4. 結果の候補を選び、採用先セグメント・確認者を入力して「選択した結果を取り込む」。証跡を `evidence\<拠点ID>\<runId>\<ハッシュ>\` へ転送・検証してから正本を保存します。監査判定は未確認の下書きのままで、確定は監査フォームで行います。取り込み中は画面移動・ファイルを閉じる操作を止めます。
+5. 取り込みの「取り消す」は業務データを戻し、取り込み記録を取消済みとして残します。共有の証跡は削除しません。
+
+スイッチの隣接情報は、`tylan-switch-export` v1形式のJSON（`records` に `protocol`（`lldp`/`cdp`/`mac-table`）・`localDevice`・`localPort`・`remoteDevice`・`remotePort`）を「スイッチ情報を取り込む」で読み込みます。資格情報の項目を含むファイルは拒否します。接続は両端の機器を選んだ候補だけを「推定」として採用し、MACテーブルは論理接続として扱います。
+
+DNS問い合わせ名は既定でハッシュだけを残します。名前を証跡に残す場合は保持日数を指定してください（期限後の削除は管理操作で行い、自動削除はしません）。収集中の結果は調査用ホストの `%LOCALAPPDATA%\tylan\audit-runs\` に保持します。実LAN・実共有での確認項目は [受入手順](doc/acceptance.md#現地監査の受入現地ゲート) を参照してください。
+
 ## 設計・受入
 
 - [要件定義](doc/requirements.md)
 - [基本設計](doc/basic-design.md)
 - [最新仕様の調査・FCIS・検証記録](doc/implementation.md)
 - [共有への公開・復旧・受入手順](doc/acceptance.md)
-- [現地LAN監査の自動収集・マッピング計画](doc/audit-automation.md)（次期拡張・未実装：PythonからNmap/TShark/PowerShellを統合し、現地で1操作で収集）
+- [現地LAN監査の自動収集・マッピング計画](doc/audit-automation.md)（実装・自動検証の対応表は12章。実LAN・実共有の現地ゲートは未実施）
 
 ローカルの `file://` はChromiumとEdgeで自動検証済みです。実際のUNC共有、NTFS権限、社内Chrome、標準PCでの性能、ExcelのCSV確認は配布先での受入が必要です。

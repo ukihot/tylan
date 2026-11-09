@@ -34,6 +34,7 @@ export type Inventory = {
     state: string
   }[]
   routes: { prefix: string; ifIndex: number; nextHop: string; metric: number }[]
+  ipv6?: { state: 'completed' | 'failed' | 'skipped'; reason: string | null }
 }
 export type RunState = {
   runId: string
@@ -43,7 +44,7 @@ export type RunState = {
   sequence: number
 }
 export type AuditProfile = {
-  mode: 'standard' | 'passive' | 'detail'
+  mode: 'standard' | 'passive' | 'detail' | 'offline'
   duration: number
   cidrs: string[]
   exclude: string[]
@@ -59,6 +60,15 @@ export type AuditProfile = {
   approvedDhcp?: string[] | null
   expectedDns?: string[] | null
   approvedPlanHash?: string
+  expectedGateway?: string[] | null
+  dnsFailureRatio?: number | null
+  detailEvidence?: { dnsNames: boolean; retentionDays: number }
+  management?: {
+    ad?: { server: string; searchBase: string }
+    dhcpServers?: string[]
+    windows?: string[]
+  }
+  switchExport?: unknown
 }
 export function createAuditClient(folder: Folder) {
   const endpoint = folder.audit
@@ -98,8 +108,8 @@ export function createAuditClient(folder: Folder) {
       const reply = await call<{ requestId: string }>(`audit/runs/${id}/evidence`, 'POST')
       return response(reply.requestId)
     },
-    async diagnose() {
-      const reply = await call<{ requestId: string }>('audit/diagnose', 'POST')
+    async diagnose(includeIPv6: boolean) {
+      const reply = await call<{ requestId: string }>('audit/diagnose', 'POST', { includeIPv6 })
       return response(reply.requestId)
     },
   }

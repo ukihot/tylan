@@ -13,14 +13,38 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes as W
+from datetime import datetime
 from pathlib import Path
 
-from .core import digest
+from .core import JST, digest
 from .evidence import atomic_json, safe_child
+from .exports import offline_collection
 from .ipc import decode_request
 from .jobs import TERMINAL, JobManager
-from .runner import Collector, execution_plan, tool_paths
+from .runner import Collector, execution_plan, tool_paths, validate_profile
 from .windows_process import WindowsRun
+
+
+class Lease:
+    """PowerShell's session lease. Once stopped or expired it is never revived."""
+
+    def __init__(self, epoch, session, now, seconds=90):
+        self.epoch, self.session, self.seconds = epoch, session, seconds
+        self.deadline = now + seconds
+
+    def refresh(self, value, now, wall):
+        if self.expired(now) or not isinstance(value, dict):
+            return
+        if value.get("ownerEpoch") == self.epoch and value.get("sessionId") == self.session:
+            age = wall - value.get("time", 0)
+            if abs(age) < self.seconds:
+                self.deadline = now + max(0, self.seconds - age)
+
+    def stop(self):
+        self.deadline = float("-inf")
+
+    def expired(self, now):
+        return now >= self.deadline
 
 
 def identifier(value):
@@ -71,17 +95,17 @@ def diagnose(ipc, request_id, include_ipv6=True):
     output = folder / "inventory.json"
     with WindowsRun() as job:
         arguments = [
-                paths["powershell"],
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(Path(__file__).with_name("collect-host.ps1")),
-                "-Output",
-                str(output),
-            ]
+            paths["powershell"],
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(Path(__file__).with_name("collect-host.ps1")),
+            "-Output",
+            str(output),
+        ]
         if include_ipv6:
-            arguments += ['-IncludeIPv6']
+            arguments += ["-IncludeIPv6"]
         process = job.spawn(
             arguments,
             folder / "stdout",
@@ -118,6 +142,7 @@ def run(config):
         W.DWORD,
     )
     kernel.CloseHandle.argtypes = [W.HANDLE]
+    kernel.ReleaseMutex.argtypes = [W.HANDLE]
     mutex = kernel.CreateMutexW(
         None, False, "Local\\TYLAN_AUDIT_" + digest(os.environ.get("USERNAME", ""))[:32]
     )
@@ -134,6 +159,11 @@ def run(config):
         active = next(
             run_id for run_id, state in manager.states.items() if state["state"] not in TERMINAL
         )
+        if profile.get("mode") == "offline":
+            # An operator-supplied export: parsed in-process, nothing is spawned or sent.
+            emit("finalizing")
+            when = datetime.now(JST).isoformat(timespec="seconds")
+            return offline_collection(validate_profile(profile), active, when)
         if config.get("fixture"):
             fixture = Path(config["fixture"])
             if fixture.stat().st_size > 10 * 1024 * 1024:
@@ -153,27 +183,23 @@ def run(config):
         ipc / "ready.json",
         {"ownerEpoch": epoch, "state": "ready", "pid": os.getpid(), "tools": tool_paths()},
     )
-    lease_deadline = time.monotonic() + 90
+    lease = Lease(epoch, session, time.monotonic())
     try:
         while True:
             manager.tick()
-            lease = ipc / "lease.json"
-            if lease.exists():
-                value = json.loads(lease.read_text(encoding="utf-8"))
-                if (
-                    value.get("ownerEpoch") == epoch
-                    and value.get("sessionId") == session
-                    and abs(time.time() - value.get("time", 0)) < 90
-                ):
-                    lease_deadline = time.monotonic() + max(0, 90 - (time.time() - value["time"]))
+            try:
+                value = json.loads((ipc / "lease.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                value = None  # absent, or PowerShell is replacing it; retry next pass
+            lease.refresh(value, time.monotonic(), time.time())
             for request_file in sorted((ipc / "requests").glob("*.json")):
                 request_id = request_file.stem
                 response_file = ipc / "responses" / request_file.name
                 if response_file.exists() or request_id in pending:
                     continue
                 try:
-                    if time.monotonic() >= lease_deadline:
-                        raise ValueError("session lease expired")
+                    if lease.expired(time.monotonic()):
+                        raise ValueError("session lease expired or owner stopping")
                     if request_file.stat().st_size > 2 * 1024 * 1024:
                         raise ValueError("request too large")
                     envelope = json.loads(request_file.read_text(encoding="utf-8"))
@@ -182,7 +208,7 @@ def run(config):
                     payload = decode_request(envelope, epoch, session, secret, int(time.time()))
                     kind = envelope["kind"]
                     if kind == "StopOwner":
-                        lease_deadline = 0
+                        lease.stop()
                         for run_id, state in list(manager.states.items()):
                             if state["state"] not in TERMINAL:
                                 manager.cancel(run_id)
@@ -204,13 +230,14 @@ def run(config):
                             {"accepted": True, "runId": state["runId"], "ownerEpoch": epoch},
                         )
                     elif kind in ("Diagnose", "Plan"):
-                        if config.get("fixture"):
-                            wrapper = json.loads(
-                                Path(config["fixture"]).read_text(encoding="utf-8")
-                            )
-                            diagnostic = wrapper.get(
-                                "diagnostics", {"tools": tool_paths(), "inventory": {}}
-                            )
+                        wrapper = (
+                            json.loads(Path(config["fixture"]).read_text(encoding="utf-8"))
+                            if config.get("fixture")
+                            else {}
+                        )
+                        # A fixture without diagnostics still runs the real, send-free host read.
+                        if "diagnostics" in wrapper:
+                            diagnostic = wrapper["diagnostics"]
                             if kind == "Plan":
                                 diagnostic["executionPlan"] = execution_plan(
                                     payload["profile"], diagnostic["inventory"]
@@ -219,8 +246,12 @@ def run(config):
                                 response_file, {"accepted": True, **diagnostic, "ownerEpoch": epoch}
                             )
                         else:
+                            features = payload.get("profile", {}).get("features", {})
+                            include_ipv6 = features.get(
+                                "ipv6Local", payload.get("includeIPv6", True)
+                            )
                             pending[request_id] = (
-                                pool.submit(diagnose, ipc, request_id, payload.get('profile', {}).get('features', {}).get('ipv6Local', payload.get('includeIPv6', True))),
+                                pool.submit(diagnose, ipc, request_id, include_ipv6 is True),
                                 envelope,
                                 payload,
                                 None,
@@ -337,7 +368,7 @@ def run(config):
                     )
                 del pending[request_id]
             if (
-                time.monotonic() >= lease_deadline
+                lease.expired(time.monotonic())
                 and not pending
                 and all(s["state"] in TERMINAL for s in manager.states.values())
             ):
@@ -346,6 +377,8 @@ def run(config):
     finally:
         manager.close()
         pool.shutdown(wait=True, cancel_futures=True)
+        atomic_json(ipc / "ready.json", {"ownerEpoch": epoch, "state": "stopped"})
+        kernel.ReleaseMutex(mutex)
         kernel.CloseHandle(mutex)
 
 

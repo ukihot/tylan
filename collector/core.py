@@ -7,6 +7,7 @@ import hashlib
 import io
 import ipaddress
 import json
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -134,24 +135,41 @@ TSHARK_FIELDS = [
 ]
 
 
-def normalize_tshark(tsv, segment):
+def ipv4_or_none(value):
+    return None if not value or value == "0.0.0.0" else str(ipaddress.IPv4Address(value))
+
+
+def clean_name(value):
+    return re.sub(r"[\x00-\x1f\x7f]", "", value)[:253]
+
+
+def complete_lines(text):
+    """Drops a row cut off when the capture was stopped mid-write."""
+    return text[: text.rfind("\n") + 1]
+
+
+def normalize_tshark(tsv, segment, limit=100000, keep_names=False):
+    """Returns (observations, omitted rows). Rows past `limit` are counted, never silently lost."""
     bounded_text(tsv)
     reader = csv.DictReader(io.StringIO(tsv), delimiter="\t", quotechar='"')
     if not reader.fieldnames or any(f not in TSHARK_FIELDS for f in reader.fieldnames):
         raise ValueError("unsupported TShark fields")
     result = []
+    omitted = 0
     for row_index, row in enumerate(reader):
         if None in row or any(v is None for v in row.values()):
             raise ValueError("incomplete field record")
+        if len(result) >= limit:
+            omitted += 1
+            continue
 
         def get(key, fields=row):
             return (fields.get(key) or "").split(",")[0]
 
         first_index = len(result)
         try:
-            when = datetime.fromtimestamp(float(get("frame.time_epoch")), JST).isoformat(
-                timespec="seconds"
-            )
+            epoch = float(get("frame.time_epoch"))
+            when = datetime.fromtimestamp(epoch, JST).isoformat(timespec="seconds")
         except (ValueError, OverflowError, OSError) as exc:
             raise ValueError("invalid packet timestamp") from exc
         ip = get("ip.src")
@@ -170,6 +188,8 @@ def normalize_tshark(tsv, segment):
         if ip:
             ipaddress.IPv4Address(ip)
             if get("dhcp.option.dhcp") in ("2", "5"):
+                lease = get("dhcp.option.ip_address_lease_time")
+                dns = (row.get("dhcp.option.domain_name_server") or "").split(",")
                 result.append(
                     observation(
                         "dhcp",
@@ -179,38 +199,62 @@ def normalize_tshark(tsv, segment):
                         {
                             "server": get("dhcp.option.dhcp_server_id") or ip,
                             "ip": ip,
-                            "relay": get("dhcp.ip.relay") or None,
+                            "relay": ipv4_or_none(get("dhcp.ip.relay")),
                             "message": get("dhcp.option.dhcp"),
                             "mac": get("eth.src").lower() or None,
-                        "offeredAddress": get('dhcp.ip.your') or None,
-                        "gateway": get('dhcp.option.router') or None,
-                        "dns": (row.get('dhcp.option.domain_name_server') or '').split(',') if row.get('dhcp.option.domain_name_server') else [],
-                        "leaseSeconds": int(get('dhcp.option.ip_address_lease_time')) if get('dhcp.option.ip_address_lease_time').isdigit() else None,
+                            "offeredAddress": ipv4_or_none(get("dhcp.ip.your")),
+                            "gateway": ipv4_or_none(get("dhcp.option.router")),
+                            "dns": [str(ipaddress.IPv4Address(a)) for a in dns if a],
+                            "leaseSeconds": int(lease) if lease.isdigit() else None,
                         },
                     )
                 )
             if get("dns.flags.response"):
-                result.append(
-                    observation(
-                        "dns",
-                        "tshark",
-                        segment,
-                        when,
-                        {
-                            "ip": ip,
-                            "destination": get("ip.dst"),
-                            "response": get("dns.flags.response") == "1",
-                            "rcode": get("dns.flags.rcode") or None,
-                            "transaction": get("dns.id"),
-                            "questionHash": digest(get("dns.qry.name")),
-                        },
-                    )
-                )
-        if len(result) > 100000:
-            raise ValueError("observation limit reached")
+                value = {
+                    "ip": ip,
+                    "destination": get("ip.dst"),
+                    "response": get("dns.flags.response") == "1",
+                    "rcode": get("dns.flags.rcode") or None,
+                    "transaction": get("dns.id"),
+                    "questionHash": digest(get("dns.qry.name")),
+                    "epoch": epoch,
+                }
+                if keep_names:
+                    value["question"] = clean_name(get("dns.qry.name"))
+                result.append(observation("dns", "tshark", segment, when, value))
         for item in result[first_index:]:
             item["id"] = digest([item["id"], get("frame.time_epoch"), row_index])[:32]
-    return result
+    return result, omitted
+
+
+def capture_stats(stderr):
+    """TShark's end-of-capture summary. Without it drops are unknown, never zero."""
+    captured = re.search(r"^(\d+) packets? captured", stderr, re.M)
+    drops = [int(n) for n in re.findall(r"^(\d+) packets? dropped", stderr, re.M)]
+    return {
+        "captured": int(captured[1]) if captured else None,
+        "dropped": sum(drops) if drops else 0 if captured else None,
+    }
+
+
+def capture_outcome(code, stderr, stopped, rows, parse_error):
+    if parse_error:
+        state, reason = "failed", f"出力解析失敗: {parse_error}"
+    elif stopped == "cancelled":
+        state, reason = "cancelled", "取消により観測途中終了"
+    elif stopped == "deadline":
+        state, reason = "timedOut", "期限により観測途中終了"
+    elif stopped == "capacity":
+        state, reason = "truncated", "容量上限で観測を打ち切り。以降の通信は欠落しています"
+    elif code:
+        denied = re.search(r"permission|npcap|access is denied|privilege", stderr, re.I)
+        prefix = "キャプチャ権限不足またはNpcap未設定" if denied else f"TShark異常終了({code})"
+        state, reason = "failed", f"{prefix}: {stderr[-300:]}"
+    elif rows == 0:
+        state, reason = "completed", "0件（条件内の対象通信を観測せず。不在の証明ではありません）"
+    else:
+        state, reason = "completed", None
+    return {"state": state, "reason": reason, **capture_stats(stderr)}
 
 
 def capture_filter(arp=True, dns=True, dhcp=True):
@@ -273,17 +317,46 @@ def authorize_targets(profile, routes):
     return sorted(map(str, targets), key=ipaddress.IPv4Address)
 
 
-def evaluate_dhcp(observed_responses, capture_succeeded, approved=None):
+def evaluate_dhcp(
+    observed_responses, capture_succeeded, approved=None, expected_gateway=None, expected_dns=None
+):
     if not capture_succeeded:
         return Evaluation("inconclusive", "DHCP観測失敗または未実施")
     if not observed_responses:
         return Evaluation("inconclusive", "DHCP応答未観測。不在の証明ではありません")
+    servers = sorted({r["server"] for r in observed_responses})
+    relays = sorted({f"{r['server']}←{r['relay']}" for r in observed_responses if r.get("relay")})
+    context = f"。配布元 {', '.join(servers)}"
+    if relays:
+        context += f"、relay経由 {', '.join(relays)}"
+    if len(servers) > 1:
+        context += "。複数配布元は冗長構成の可能性があります"
     if approved is None:
-        return Evaluation("inconclusive", "承認DHCP基準未設定")
-    unexpected = sorted({r["server"] for r in observed_responses} - set(approved))
+        return Evaluation("inconclusive", "承認DHCP基準未設定" + context)
+    unexpected = sorted(set(servers) - set(approved))
     if unexpected:
-        return Evaluation("finding", "承認基準にないDHCP配布元候補: " + ", ".join(unexpected))
-    return Evaluation("noFindingInScope", "観測した配布元は基準内。未観測の配布元は評価できません")
+        return Evaluation(
+            "finding", "承認基準にないDHCP配布元候補: " + ", ".join(unexpected) + context
+        )
+    differences = set()
+    for r in observed_responses:
+        if expected_gateway is not None and r.get("gateway") not in (None, *expected_gateway):
+            differences.add(f"{r['server']} GW {r['gateway']}")
+        extra = [d for d in r.get("dns", []) if expected_dns is not None and d not in expected_dns]
+        if extra:
+            differences.add(f"{r['server']} DNS {', '.join(extra)}")
+    if differences:
+        return Evaluation(
+            "finding", "配布内容が基準と異なります: " + "; ".join(sorted(differences)) + context
+        )
+    unset = expected_gateway is None or expected_dns is None
+    return Evaluation(
+        "noFindingInScope",
+        "観測した配布元は基準内"
+        + ("。配布内容の基準未設定（GW/DNSは未評価）" if unset else "")
+        + context
+        + "。未観測の配布元は評価できません",
+    )
 
 
 def evaluate_ipv6(addresses, routes, succeeded, unused=True):
@@ -305,39 +378,168 @@ def evaluate_ipv6(addresses, routes, succeeded, unused=True):
     )
 
 
+def ipv6_finding(enabled, inventory, unused=True):
+    base = {"id": "ipv6-local-v1", "itemNo": 12, "observationIds": []}
+    if not enabled:
+        reason = "IPv6ローカル設定確認OFF。IPv6設定未確認（IPv6経路なしとは判定しません）"
+        return {**base, **Evaluation("inconclusive", reason).to_dict()}
+    status = inventory.get("ipv6") or {}
+    if status.get("state") != "completed":
+        reason = f"IPv6設定未確認: {status.get('reason') or '取得失敗'}"
+        return {**base, **Evaluation("inconclusive", reason).to_dict()}
+    addresses = [a for a in inventory.get("addresses", []) if a.get("family") == "IPv6"]
+    routes = [
+        r
+        for r in inventory.get("routes", [])
+        if r.get("family") == "IPv6" and r.get("prefix") == "::/0"
+    ]
+    return {**base, **evaluate_ipv6(addresses, routes, True, unused).to_dict()}
+
+
 def same_device_candidates(values):
     return [{**value, "certainty": "candidate"} for value in values]
 
 
-def evaluate_dns(packets, expected=None, configured=None):
+def dns_statistics(packets, capture_end=None, host_ips=(), tail_seconds=5):
+    """Pairs queries and answers by client, server, id and question; own-host traffic apart."""
+    queries, answers = {}, {}
+    for p in packets:
+        if p.get("response"):
+            key = (p.get("destination"), p.get("ip"), p.get("transaction"), p.get("questionHash"))
+            answers.setdefault(key, []).append(p)
+        else:
+            key = (p.get("ip"), p.get("destination"), p.get("transaction"), p.get("questionHash"))
+            queries.setdefault(key, []).append(p)
+    stats = {
+        "queries": 0,
+        "answered": 0,
+        "unanswered": 0,
+        "pendingAtEnd": 0,
+        "retransmissions": 0,
+        "selfHost": 0,
+        "unmatchedResponses": 0,
+        "rcodes": {},
+    }
+    for key, sent in queries.items():
+        if key[0] in host_ips:
+            stats["selfHost"] += 1
+            continue
+        stats["queries"] += 1
+        stats["retransmissions"] += len(sent) - 1
+        last = max(p.get("epoch") or 0 for p in sent)
+        if key in answers:
+            stats["answered"] += 1
+        elif capture_end is not None and last >= capture_end - tail_seconds:
+            stats["pendingAtEnd"] += 1
+        else:
+            stats["unanswered"] += 1
+    for key, received in answers.items():
+        if key[0] in host_ips:
+            continue
+        if key not in queries:
+            stats["unmatchedResponses"] += 1
+        code = received[-1].get("rcode") or "unknown"
+        stats["rcodes"][code] = stats["rcodes"].get(code, 0) + 1
+    return stats
+
+
+def evaluate_dns(
+    packets,
+    expected=None,
+    configured=None,
+    *,
+    captured=True,
+    capture_end=None,
+    host_ips=(),
+    failure_ratio=None,
+):
     configured = configured or []
-    if expected is None:
-        return Evaluation('inconclusive', '想定DNS基準未設定。観測統計だけを表示します')
-    destinations = {p.get('destination') for p in packets if not p.get('response') and p.get('destination')}
-    unexpected = sorted((set(configured) | destinations) - set(expected))
-    if unexpected:
-        return Evaluation('finding', '想定外DNS設定/宛先候補: ' + ', '.join(unexpected))
-    if not configured and not packets:
-        return Evaluation('inconclusive', 'DNS設定/通信を確認できません')
-    codes = {}
-    for packet in packets:
-        if packet.get('response'):
-            code = packet.get('rcode') or 'unknown'
-            codes[code] = codes.get(code, 0) + 1
-    return Evaluation('noFindingInScope', f'取得したDNS設定/宛先は基準内。観測応答コード件数 {codes}。単発NXDOMAINや無応答から障害を断定しません')
-
-
-def findings_for(observations, capture_succeeded, approved=None):
-    finding = evaluate_dhcp(
-        [o["value"] for o in observations if o["type"] == "dhcp"], capture_succeeded, approved
+    host_ips = set(host_ips)
+    stats = dns_statistics(packets, capture_end, host_ips)
+    summary = (
+        f"問い合わせ{stats['queries']}件（応答{stats['answered']}・無応答{stats['unanswered']}"
+        f"・期間末尾{stats['pendingAtEnd']}・再送{stats['retransmissions']}"
+        f"・対応なし応答{stats['unmatchedResponses']}）、自ホスト分{stats['selfHost']}件は別集計、"
+        f"応答コード{stats['rcodes']}。DoH/DoT（暗号化DNS）の中身は観測対象外です"
     )
-    findings = [
-        {
-            "id": "dhcp-server-v1",
-            "itemNo": 14,
-            **finding.to_dict(),
-            "observationIds": [o["id"] for o in observations if o["type"] == "dhcp"],
+    if expected is not None:
+        destinations = {
+            p.get("destination") for p in packets if not p.get("response") and p.get("destination")
         }
+        unexpected = sorted((set(configured) | destinations) - set(expected))
+        if unexpected:
+            return Evaluation("finding", "想定外DNS設定/宛先候補: " + ", ".join(unexpected))
+    failures = stats["rcodes"].get("2", 0) + stats["unanswered"]
+    sample = stats["answered"] + stats["unmatchedResponses"] + stats["unanswered"]
+    if failure_ratio is not None and failures >= 2 and failures / sample >= failure_ratio:
+        return Evaluation(
+            "finding", f"SERVFAIL・無応答が閾値以上（{failures}/{sample}）。{summary}"
+        )
+    if not captured:
+        return Evaluation("inconclusive", f"DNS観測失敗または未実施。{summary}")
+    if expected is None:
+        return Evaluation("inconclusive", f"想定DNS基準未設定。観測統計だけを表示します。{summary}")
+    if not configured and not packets:
+        return Evaluation("inconclusive", "DNS設定/通信を確認できません")
+    if stats["queries"] and not stats["answered"] and not stats["unmatchedResponses"]:
+        return Evaluation(
+            "inconclusive", f"問い合わせのみ観測し応答は未観測。観測点・ドロップを確認。{summary}"
+        )
+    return Evaluation(
+        "noFindingInScope",
+        f"取得したDNS設定/宛先は基準内。単発NXDOMAINや無応答から障害を断定しません。{summary}",
+    )
+
+
+def findings_for(observations, capture, profile):
+    """capture: {"succeeded": bool, "endEpoch": float|None}. OFF features stay unchecked."""
+    features = profile.get("features", {})
+    captured = capture.get("succeeded", False)
+    host = next(
+        (
+            o["value"]
+            for o in observations
+            if o["type"] == "hostConfiguration" and o["source"] == "powershell"
+        ),
+        {},
+    )
+    host_ips = {a["address"] for a in host.get("addresses", []) if a.get("family") == "IPv4"}
+    configured = [
+        address
+        for entry in host.get("dns", [])
+        if entry.get("ifIndex") == profile.get("ifIndex")
+        for address in entry.get("addresses", [])
+        if "." in address
+    ]
+
+    def ids(kind):
+        return [o["id"] for o in observations if o["type"] == kind]
+
+    if features.get("dhcp"):
+        dhcp = evaluate_dhcp(
+            [o["value"] for o in observations if o["type"] == "dhcp"],
+            captured,
+            profile.get("approvedDhcp"),
+            profile.get("expectedGateway"),
+            profile.get("expectedDns"),
+        )
+    else:
+        dhcp = Evaluation("inconclusive", "DHCP監査OFF。DHCPは未確認です（対象外にはしません）")
+    if features.get("dns"):
+        dns = evaluate_dns(
+            [o["value"] for o in observations if o["type"] == "dns"],
+            profile.get("expectedDns"),
+            configured,
+            captured=captured,
+            capture_end=capture.get("endEpoch"),
+            host_ips=host_ips,
+            failure_ratio=profile.get("dnsFailureRatio"),
+        )
+    else:
+        dns = Evaluation("inconclusive", "DNS監査OFF。DNSは未確認です（対象外にはしません）")
+    findings = [
+        {"id": "dhcp-server-v1", "itemNo": 14, **dhcp.to_dict(), "observationIds": ids("dhcp")},
+        {"id": "dns-v1", "itemNo": 17, **dns.to_dict(), "observationIds": ids("dns")},
     ]
     arp = {}
     for obs in observations:

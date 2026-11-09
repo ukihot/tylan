@@ -12,10 +12,27 @@ def test_dns_single_nxdomain_and_missing_baseline_are_not_health_certificates():
 
 
 def test_switch_exports_are_evidence_candidates_and_mac_table_is_not_a_cable():
-    export = {"format": "tylan-switch-export", "schemaVersion": 1, "vendor": "generic", "records": [
-        {"protocol": "lldp", "localDevice": "SW-1", "localPort": "Gi1", "remoteDevice": "AP-1", "remotePort": "eth0"},
-        {"protocol": "mac-table", "localDevice": "SW-1", "localPort": "Gi2", "remoteDevice": "00:11:22:33:44:55", "remotePort": None},
-    ]}
+    export = {
+        "format": "tylan-switch-export",
+        "schemaVersion": 1,
+        "vendor": "generic",
+        "records": [
+            {
+                "protocol": "lldp",
+                "localDevice": "SW-1",
+                "localPort": "Gi1",
+                "remoteDevice": "AP-1",
+                "remotePort": "eth0",
+            },
+            {
+                "protocol": "mac-table",
+                "localDevice": "SW-1",
+                "localPort": "Gi2",
+                "remoteDevice": "00:11:22:33:44:55",
+                "remotePort": None,
+            },
+        ],
+    }
     observations = normalize_switch_export(export, "site", "2026-11-06T12:00:00+09:00")
     assert observations[0]["type"] == "physicalCandidate"
     assert observations[1]["value"]["linkKind"] == "logical"

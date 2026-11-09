@@ -93,7 +93,7 @@ def test_tshark_fields_ignore_ipv6_and_keep_ipv4_dhcp():
         "00:11:22:33:44:55",
     ]
     data = "\t".join(header) + "\n" + "\t".join(row) + "\n"
-    observations = normalize_tshark(data, "seg")
+    observations, _ = normalize_tshark(data, "seg")
     assert observations[0]["type"] == "dhcp"
     assert observations[0]["value"]["server"] == "192.168.10.1"
     assert all("name" not in o["value"] for o in observations)
@@ -145,3 +145,8 @@ def test_ipv6_presence_does_not_claim_rogue_ra():
     assert result.status == "finding"
     assert "RA" not in result.reason
     assert evaluate_ipv6([], [], False).status == "inconclusive"
+
+
+def test_equal_cost_routes_to_another_nic_are_ambiguous_and_refused():
+    with pytest.raises(ValueError, match="ambiguous"):
+        authorize_targets(profile(), [route(), route(nic=5)])

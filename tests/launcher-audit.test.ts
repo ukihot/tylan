@@ -1,9 +1,11 @@
 import { type ChildProcess, spawn } from 'node:child_process'
-import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { migrateV2, planImport } from '../src/lib/import-plan'
 import { prepareExport } from '../src/lib/io'
+import type { Doc } from '../src/lib/schema'
 import { fixture, id, NOW } from '../src/lib/test-fixture'
 
 let child: ChildProcess
@@ -218,3 +220,273 @@ test('real IPC seals evidence before canonical commit and reconciles a lost ackn
   expect(JSON.parse(reconciled.text).devices).toHaveLength(3)
   expect(JSON.parse(reconciled.text).importBatches[0].id).toBe(plan.importId)
 }, 60000)
+
+type Reply = {
+  accepted: boolean | null
+  error?: string
+  package?: { path: string; hash: string }
+}
+const json = async <T = Record<string, unknown>>(response: Promise<Response>) =>
+  (await (await response).json()) as T
+const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+
+async function finishedRun(profile: object = { siteId: id('sit', 1) }) {
+  const key = `k${Math.random().toString(36).slice(2)}`
+  const started = await json<{ runId: string }>(
+    call('audit/runs', 'POST', JSON.stringify({ key, profile })),
+  )
+  await expect
+    .poll(
+      async () =>
+        (await json<{ state?: { state: string } }>(call(`audit/runs/${started.runId}`))).state
+          ?.state,
+      { timeout: 15000 },
+    )
+    .toBe('completed')
+  return started.runId
+}
+async function reply(requestId: string) {
+  let value: Reply = { accepted: null }
+  await expect
+    .poll(
+      async () => {
+        value = await json<Reply>(call(`audit/responses?id=${requestId}`))
+        return value.accepted
+      },
+      { timeout: 20000 },
+    )
+    .not.toBeNull()
+  return value
+}
+async function importReply(importId: string) {
+  let value: Reply = { accepted: null }
+  await expect
+    .poll(
+      async () => {
+        value = (await json<{ response: Reply }>(call(`imports/${importId}`))).response
+        return value.accepted
+      },
+      { timeout: 20000 },
+    )
+    .not.toBeNull()
+  return value
+}
+async function verify(importId: string) {
+  expect((await call(`imports/${importId}/verify`, 'POST')).status).toBe(202)
+  return importReply(importId)
+}
+/** Seals a finished fixture run and prepares its import into a fresh working/<file>. */
+async function prepared(file: string, edit?: (candidate: Doc) => void) {
+  const runId = await finishedRun()
+  const collection = await json(call(`audit/runs/${runId}/result`))
+  const sealed = await reply(
+    (await json<{ requestId: string }>(call(`audit/runs/${runId}/evidence`, 'POST'))).requestId,
+  )
+  expect(sealed.accepted, sealed.error).toBe(true)
+  const doc = migrateV2(fixture(), id('doc', 7))
+  const created = await json<{ lastModified: string }>(
+    call(`file?path=working/${file}&expect=new`, 'PUT', JSON.stringify(doc)),
+  )
+  const plan = await planImport(doc, collection, {
+    documentId: doc.documentId!,
+    siteId: id('sit', 1),
+    segmentId: id('seg', 1),
+    roundId: null,
+    selected: ['printer'],
+    mappings: {},
+    checkedBy: 'tester',
+    now: NOW,
+    packageHash: sealed.package!.hash,
+    storageLocation: sealed.package!.path,
+  })
+  const candidate = JSON.parse(prepareExport(plan.doc, NOW, 'tester').text) as Doc
+  edit?.(candidate)
+  const body = {
+    importId: plan.importId,
+    path: `working/${file}`,
+    expect: created.lastModified,
+    siteId: id('sit', 1),
+    text: JSON.stringify(candidate),
+  }
+  const response = await call('imports/prepare', 'POST', JSON.stringify(body))
+  return { runId, plan, body, response, sealed, path: join(root, 'working', file) }
+}
+const fault = (point: string) => call(`test/fault?point=${point}`, 'POST')
+const reconcile = async (importId: string) =>
+  (await json<{ state: string }>(call(`imports/${importId}/reconcile`))).state
+
+test('a read never pairs one content with another version stamp while a writer races', async () => {
+  const target = join(root, 'working', 'race.json')
+  await writeFile(target, '{"n":0}')
+  let writing = true
+  const writer = (async () => {
+    for (let n = 1; writing; n++) {
+      await writeFile(target, JSON.stringify({ n, pad: 'x'.repeat(n % 4000) })).catch(() => {})
+    }
+  })()
+  let checked = 0
+  for (let i = 0; i < 60; i++) {
+    const response = await call('file?path=working/race.json')
+    if (response.status !== 200) {
+      expect(response.status).toBe(409) // busy is acceptable; a torn pair is not
+      continue
+    }
+    const text = await response.text()
+    expect(response.headers.get('X-Last-Modified')!.split(':')[1]).toBe(sha(text))
+    checked++
+  }
+  writing = false
+  await writer
+  expect(checked).toBeGreaterThan(10)
+}, 60000)
+
+test('importId stays bound to its run, selection and evidence package', async () => {
+  const unknown = await prepared('bind-unknown.json', (doc) => {
+    doc.importBatches![0]!.runId = 'neverStartedHere'
+  })
+  expect(unknown.response.status).toBe(403)
+  const first = await prepared('bind.json')
+  expect(first.response.status).toBe(202)
+  const tampered = JSON.parse(first.body.text) as Doc
+  tampered.importBatches![0]!.selectionHash = 'f'.repeat(64)
+  const again = await call(
+    'imports/prepare',
+    'POST',
+    JSON.stringify({ ...first.body, text: JSON.stringify(tampered) }),
+  )
+  expect(again.status).toBe(409)
+}, 60000)
+
+test('a failed replace keeps the canonical file and a clean retry applies once', async () => {
+  const { plan, response, path } = await prepared('fault-replace.json')
+  expect(response.status).toBe(202)
+  expect((await importReply(plan.importId)).accepted).toBe(true)
+  expect((await verify(plan.importId)).accepted).toBe(true)
+  const before = await readFile(path, 'utf8')
+  expect((await fault('replace')).status).toBe(204)
+  expect((await call(`imports/${plan.importId}/commit`, 'POST')).status).toBe(500)
+  expect(await readFile(path, 'utf8')).toBe(before)
+  expect(await reconcile(plan.importId)).toBe('notApplied')
+  expect((await verify(plan.importId)).accepted).toBe(true)
+  expect((await call(`imports/${plan.importId}/commit`, 'POST')).status).toBe(200)
+  expect(await reconcile(plan.importId)).toBe('applied')
+  expect(JSON.parse(await readFile(path, 'utf8')).devices).toHaveLength(3)
+}, 60000)
+
+test('a lost commit response is recovered by reconcile, never by re-saving', async () => {
+  const { plan, path } = await prepared('fault-respond.json')
+  expect((await importReply(plan.importId)).accepted).toBe(true)
+  expect((await verify(plan.importId)).accepted).toBe(true)
+  expect((await fault('respond')).status).toBe(204)
+  expect((await call(`imports/${plan.importId}/commit`, 'POST')).status).toBe(500)
+  expect(await reconcile(plan.importId)).toBe('applied')
+  expect((await verify(plan.importId)).accepted).toBe(true)
+  expect((await call(`imports/${plan.importId}/commit`, 'POST')).status).toBe(409)
+  const saved = JSON.parse(await readFile(path, 'utf8'))
+  expect(saved.devices).toHaveLength(3)
+  expect(saved.importBatches).toHaveLength(1)
+}, 60000)
+
+test('a failed import receipt does not undo or fail a verified canonical save', async () => {
+  const { plan } = await prepared('fault-receipt.json')
+  expect((await importReply(plan.importId)).accepted).toBe(true)
+  expect((await verify(plan.importId)).accepted).toBe(true)
+  expect((await fault('receipt')).status).toBe(204)
+  expect((await call(`imports/${plan.importId}/commit`, 'POST')).status).toBe(200)
+  expect(await reconcile(plan.importId)).toBe('applied')
+}, 60000)
+
+test('an ordinary save that fails before writing leaves the file as it was', async () => {
+  const created = await json<{ lastModified: string }>(
+    call('file?path=working/fault-write.json&expect=new', 'PUT', '{"v":1}'),
+  )
+  expect((await fault('write')).status).toBe(204)
+  const failed = await call(
+    `file?path=working/fault-write.json&expect=${encodeURIComponent(created.lastModified)}`,
+    'PUT',
+    '{"v":2}',
+  )
+  expect(failed.status).toBe(500)
+  expect(await readFile(join(root, 'working', 'fault-write.json'), 'utf8')).toBe('{"v":1}')
+})
+
+test('evidence lost after preparation blocks commit until identical local content restores it', async () => {
+  const { plan, body, path, sealed } = await prepared('evidence-lost.json')
+  expect((await importReply(plan.importId)).accepted).toBe(true)
+  await rm(join(sealed.package!.path, 'result.json'))
+  expect((await verify(plan.importId)).accepted).toBe(false)
+  expect((await call(`imports/${plan.importId}/commit`, 'POST')).status).toBe(409)
+  expect(JSON.parse(await readFile(path, 'utf8')).devices).toHaveLength(2)
+  expect((await call('imports/prepare', 'POST', JSON.stringify(body))).status).toBe(202)
+  expect((await importReply(plan.importId)).accepted).toBe(true)
+  expect((await verify(plan.importId)).accepted).toBe(true)
+  expect((await call(`imports/${plan.importId}/commit`, 'POST')).status).toBe(200)
+}, 90000)
+
+test('an evidence transfer failure is reported and nothing is sealed', async () => {
+  const runId = await finishedRun()
+  await mkdir(join(root, 'evidence', id('sit', 1)), { recursive: true })
+  await writeFile(join(root, 'evidence', id('sit', 1), runId), 'not a folder')
+  const sealed = await reply(
+    (await json<{ requestId: string }>(call(`audit/runs/${runId}/evidence`, 'POST'))).requestId,
+  )
+  expect(sealed.accepted).toBe(false)
+})
+
+test('an offline switch export becomes an imported run without sending anything', async () => {
+  const runId = await finishedRun({
+    mode: 'offline',
+    siteId: id('sit', 1),
+    switchExport: {
+      format: 'tylan-switch-export',
+      schemaVersion: 1,
+      vendor: 'generic',
+      records: [
+        {
+          protocol: 'lldp',
+          localDevice: 'SW-1',
+          localPort: 'Gi1',
+          remoteDevice: 'AP-1',
+          remotePort: 'eth0',
+        },
+      ],
+    },
+  })
+  const result = await json<{
+    scope: { observationPoint: string }
+    observations: { type: string; source: string }[]
+  }>(call(`audit/runs/${runId}/result`))
+  expect(result.scope.observationPoint).toBe('imported')
+  expect(result.observations[0]?.type).toBe('physicalCandidate')
+  expect(result.observations.some((o) => o.source === 'synthetic')).toBe(false)
+})
+
+test('the IPv6 switch reaches the real read-only host diagnosis through PowerShell and Python', async () => {
+  const diagnose = async (includeIPv6: boolean) => {
+    const request = await json<{ requestId: string }>(
+      call('audit/diagnose', 'POST', JSON.stringify({ includeIPv6 })),
+    )
+    return (await reply(request.requestId)) as Reply & {
+      inventory?: { ipv6?: { state: string; reason: string | null } }
+    }
+  }
+  const off = await diagnose(false)
+  expect(off.accepted, off.error).toBe(true)
+  expect(off.inventory?.ipv6?.state).toBe('skipped')
+  const on = await diagnose(true)
+  expect(['completed', 'failed']).toContain(on.inventory?.ipv6?.state)
+}, 60000)
+
+test('a stopped owner reports itself and ordinary saves keep working', async () => {
+  expect((await call('audit/test-stop', 'POST')).status).toBe(202)
+  await expect
+    .poll(
+      async () => {
+        const diagnose = await json<{ requestId: string }>(call('audit/diagnose', 'POST', '{}'))
+        return (await json<Reply>(call(`audit/responses?id=${diagnose.requestId}`))).error ?? ''
+      },
+      { timeout: 15000 },
+    )
+    .toMatch(/stopped/)
+  expect((await call('file?path=working/after-stop.json&expect=new', 'PUT', '{}')).status).toBe(200)
+}, 30000)
