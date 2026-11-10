@@ -39,13 +39,35 @@ $script:auditLastLease = 0
 $script:auditBase = Join-Path $env:LOCALAPPDATA 'tylan'
 $script:auditIpc = Join-Path (Join-Path $auditBase 'audit-ipc') $auditEpoch
 $script:auditRunsRoot = Join-Path $auditBase 'audit-runs'
-if (-not $CollectorRoot) {
-  $CollectorRoot = if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'collector')) { $PSScriptRoot } else { Split-Path -Parent $PSScriptRoot }
-}
+if (-not $CollectorRoot) { $CollectorRoot = Split-Path -Parent $PSScriptRoot }
 if ($AuditFixture -and -not $NoBrowser) { throw 'AuditFixture requires NoBrowser and is for offline acceptance tests only' }
+$script:auditPython = $null
+# Same search order as collector.runner.tool_paths.
+function Find-Tool([string]$name, [string]$folder) {
+  foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if ($base -and (Test-Path -LiteralPath (Join-Path $base "$folder\$name"))) { return $true }
+  }
+  return [bool](Get-Command $name -ErrorAction SilentlyContinue)
+}
+# WindowsApps\python.exe is a Store stub that only prints an install hint, so run each candidate.
+function Find-Python {
+  foreach ($candidate in @(Get-Command python.exe -All -ErrorAction SilentlyContinue)) {
+    try {
+      & $candidate.Source -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>$null
+      if ($LASTEXITCODE -eq 0) { return $candidate.Source }
+    } catch { }
+  }
+  return $null
+}
+# The editor lists what is missing on the audit screen before anything is started.
 function Audit-Info {
-  $python = Get-Command python.exe -ErrorAction SilentlyContinue
-  @{ available = [bool]($python -and (Test-Path -LiteralPath (Join-Path $CollectorRoot 'collector\job_owner.py'))); protocolVersion = 1; onLinkOnly = $true; ipv6Capture = $false; ipv6Scan = $false }
+  if (-not $script:auditPython) { $script:auditPython = Find-Python }
+  $missing = @()
+  if (-not $auditPython) { $missing += 'Python 3.12+' }
+  if (-not (Find-Tool 'nmap.exe' 'Nmap')) { $missing += 'Nmap' }
+  if (-not (Find-Tool 'tshark.exe' 'Wireshark')) { $missing += 'Wireshark (TShark)' }
+  if (-not (Test-Path -LiteralPath (Join-Path $env:SystemRoot 'System32\Npcap'))) { $missing += 'Npcap' }
+  @{ available = [bool]($auditPython -and (Test-Path -LiteralPath (Join-Path $CollectorRoot 'collector\job_owner.py'))); missing = $missing; protocolVersion = 1; onLinkOnly = $true; ipv6Capture = $false; ipv6Scan = $false }
 }
 function Start-AuditOwner {
   if ($script:auditStarted) { return }
@@ -67,8 +89,7 @@ function Start-AuditOwner {
   if ($AuditFixture) { $config.fixture = $AuditFixture }
   $configPath = Join-Path $auditIpc 'config.json'
   Local-Json $configPath $config
-  $python = (Get-Command python.exe).Source
-  Start-Process -FilePath $python -ArgumentList @('-m', 'collector.job_owner', '--config', ('"' + $configPath + '"')) -WorkingDirectory $CollectorRoot -WindowStyle Hidden -RedirectStandardError (Join-Path $auditIpc 'owner.err') -RedirectStandardOutput (Join-Path $auditIpc 'owner.out')
+  Start-Process -FilePath $auditPython -ArgumentList @('-m', 'collector.job_owner', '--config', ('"' + $configPath + '"')) -WorkingDirectory $CollectorRoot -WindowStyle Hidden -RedirectStandardError (Join-Path $auditIpc 'owner.err') -RedirectStandardOutput (Join-Path $auditIpc 'owner.out')
   $script:auditStarted = $true
   Update-AuditLease
 }

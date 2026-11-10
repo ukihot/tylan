@@ -34,3 +34,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Working data of the local launcher (JSON, published HTML, evidence). Back it up; git clean -x deletes it.
+/data/

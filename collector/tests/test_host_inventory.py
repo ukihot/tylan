@@ -43,3 +43,12 @@ def test_ipv6_off_is_skipped_and_on_reads_local_configuration_only(tmp_path):
         assert on["ipv6"]["reason"]
         assert all(a["family"] == "IPv4" for a in on["addresses"])
     assert any(a["family"] == "IPv4" for a in on["addresses"])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell inventory gate")
+def test_route_targets_are_plain_strings(tmp_path):
+    # Get-Content strings carry PSPath/PSDrive; serializing them hung ConvertTo-Json (2026-11-10).
+    targets = tmp_path / "targets.txt"
+    targets.write_text("\n".join(f"127.0.0.{n}" for n in range(1, 17)), encoding="utf-8")
+    result = inventory(tmp_path, "-Targets", str(targets))
+    assert [r["target"] for r in result["bestRoutes"]] == [f"127.0.0.{n}" for n in range(1, 17)]

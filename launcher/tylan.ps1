@@ -1,5 +1,6 @@
-# tylan launcher: serves editor.html on 127.0.0.1 and does the file I/O on the tylan folder for it.
-# Edge cannot write to SMB shares through the File System Access API, so this process writes instead.
+# tylan launcher: runs from the source checkout on the audit host. It serves dist\editor.html on
+# 127.0.0.1 and does the file I/O on the local data folder (default: <checkout>\data) for it.
+# Only the published viewer.html goes to the file share, copied there by hand.
 # Safety: loopback only, a random token per launch, Host/Origin checks, a fixed set of sub folders,
 # and stops by itself a few minutes after the editor window is closed.
 # Keep this file ASCII-only: Windows PowerShell 5.1 reads BOM-less scripts in the ANSI code page.
@@ -25,10 +26,12 @@ trap {
   exit 1
 }
 
-if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
+$checkout = Split-Path -Parent $PSScriptRoot
+if (-not $Root) { $Root = Join-Path $checkout 'data' }
+[void][System.IO.Directory]::CreateDirectory($Root)
 $Root = (Resolve-Path -LiteralPath $Root).ProviderPath
-$editor = Join-Path $PSScriptRoot 'editor.html'
-if (-not (Test-Path -LiteralPath $editor)) { throw "editor.html not found next to tylan.ps1: $editor" }
+$editor = Join-Path $checkout 'dist\editor.html'
+if (-not (Test-Path -LiteralPath $editor)) { throw "dist\editor.html not found. Run 'bun run build' in $checkout first." }
 $dirs = @{ 'working' = 'working'; 'working/csv' = 'working\csv'; 'published' = 'published'; 'archive' = 'archive' }
 $exts = @('.json', '.html', '.csv')
 $maxBody = 32MB
@@ -202,7 +205,7 @@ function Route($req) {
   $o = $req.Headers['origin']
   if ($o -and $o -ne $origin) { Fail 403 'bad origin' }
   if ($req.Path -eq '/') {
-    if ($req.Method -ne 'GET' -or $req.Query['t'] -ne $token) { Fail 403 'start the editor from tools\tylan.cmd' }
+    if ($req.Method -ne 'GET' -or $req.Query['t'] -ne $token) { Fail 403 'start the editor from launcher\tylan.cmd' }
     return Reply 200 'text/html; charset=utf-8' ([System.IO.File]::ReadAllBytes($editor))
   }
   if ($req.Headers['x-tylan-token'] -ne $token) { Fail 403 'missing token' }

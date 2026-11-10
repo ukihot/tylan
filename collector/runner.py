@@ -268,9 +268,12 @@ class Collector:
         observations, collectors, tools = [], [], {}
         paths = tool_paths()
 
-        def command(job, args, name, timeout=30, changed=None):
+        # When a command stops the job, every process in it dies, a running capture included.
+        halted = []
+
+        def command(job, args, name, timeout=30, changed=None, limit=10 * 1024 * 1024):
             if cancelled.is_set() or (changed and changed.is_set()) or time.monotonic() >= deadline:
-                raise TimeoutError("cancelled/route changed before process start")
+                raise TimeoutError(f"{name}: cancelled/route changed before process start")
             self.sequence += 1
             stdout = self.root / f"{self.sequence}-{name}.out"
             stderr = self.root / f"{self.sequence}-{name}.err"
@@ -278,15 +281,17 @@ class Collector:
             end = min(deadline, time.monotonic() + timeout)
             while job.poll(handle) is None:
                 if cancelled.is_set() or (changed and changed.is_set()) or time.monotonic() >= end:
-                    job.stop()
-                    raise TimeoutError("cancelled/route changed/time limit")
-                if stdout.stat().st_size + stderr.stat().st_size > 10 * 1024 * 1024:
-                    job.stop()
-                    raise ValueError("tool output exceeds limit")
-                if self.run_bytes() > MAX_RUN_BYTES:
-                    job.stop()
-                    raise ValueError("run directory exceeds 200MiB")
-                time.sleep(0.05)
+                    error = TimeoutError(f"{name}: cancelled/route changed/time limit")
+                elif stdout.stat().st_size + stderr.stat().st_size > limit:
+                    error = ValueError(f"{name}: tool output exceeds limit")
+                elif self.run_bytes() > MAX_RUN_BYTES:
+                    error = ValueError(f"{name}: run directory exceeds 200MiB")
+                else:
+                    time.sleep(0.05)
+                    continue
+                halted.append(time.monotonic())
+                job.stop()
+                raise error
             code = job.poll(handle)
             if code:
                 raise ValueError(
@@ -394,7 +399,10 @@ class Collector:
             capture_started = capture_wall = capture_interface = None
             if paths["tshark"] and tshark_filter:
                 try:
-                    fields = command(job, [paths["tshark"], "-G", "fields"], "fields", 60)
+                    # Wireshark 4.6 lists every dissector field: about 11 MiB.
+                    fields = command(
+                        job, [paths["tshark"], "-G", "fields"], "fields", 60, limit=64 * 1024 * 1024
+                    )
                     if any("\t" + field + "\t" not in fields for field in TSHARK_FIELDS):
                         raise ValueError("unsupported TShark field version")
                     interfaces = command(job, [paths["tshark"], "-D"], "capture-interfaces")
@@ -523,7 +531,10 @@ class Collector:
                                     and phase == "ports"
                                 ):
                                     args += ["-sV", "--version-light"]
-                                command(job, args + batch, "nmap", 10, watcher.changed)
+                                # --host-timeout bounds each host, not the batch: allow every
+                                # host its 10 s plus start-up. The run deadline still caps it all.
+                                limit = 10 * len(batch) + 20
+                                command(job, args + batch, "nmap", limit, watcher.changed)
                                 observations.extend(
                                     normalize_nmap(
                                         output.read_text(encoding="utf-8"),
@@ -552,7 +563,7 @@ class Collector:
             capture_end = None
             if capture:
                 emit("observing", window)  # the remaining passive window after scanning
-                stopped = None
+                stopped = "aborted" if any(t >= capture_started for t in halted) else None
                 while job.poll(capture) is None:
                     if cancelled.is_set():
                         stopped = "cancelled"

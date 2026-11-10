@@ -15,12 +15,14 @@ let root: string
 beforeAll(async () => {
   await mkdir('.build', { recursive: true })
   root = await mkdtemp(resolve('.build/audit-contract-'))
-  const tools = join(root, 'tools')
-  await mkdir(tools)
+  // A stand-in checkout: launcher\ next to dist\editor.html, data under -Root.
+  const launcher = join(root, 'launcher')
+  await mkdir(launcher)
+  await mkdir(join(root, 'dist'))
   await mkdir(join(root, 'working'))
-  await writeFile(join(tools, 'editor.html'), '<!doctype html><title>test</title>')
-  await copyFile('launcher/tylan.ps1', join(tools, 'tylan.ps1'))
-  await copyFile('launcher/audit.ps1', join(tools, 'audit.ps1'))
+  await writeFile(join(root, 'dist', 'editor.html'), '<!doctype html><title>test</title>')
+  await copyFile('launcher/tylan.ps1', join(launcher, 'tylan.ps1'))
+  await copyFile('launcher/audit.ps1', join(launcher, 'audit.ps1'))
   const fake = join(root, 'synthetic.json')
   await writeFile(
     fake,
@@ -56,7 +58,7 @@ beforeAll(async () => {
       '-ExecutionPolicy',
       'Bypass',
       '-File',
-      join(tools, 'tylan.ps1'),
+      join(launcher, 'tylan.ps1'),
       '-Root',
       root,
       '-NoBrowser',
@@ -127,6 +129,7 @@ test('canonical save detects equal-mtime content changes and preserves the previ
 test('audit capabilities and unavailable owner cannot disable ordinary saves', async () => {
   const info = await (await call('info')).json()
   expect(info.audit).toBeDefined()
+  expect(Array.isArray(info.audit.missing)).toBe(true)
   expect((await call('audit/runs/not-allowed/../../file')).status).not.toBe(200)
   expect((await call('file?path=working/after.json&expect=new', 'PUT', '{}')).status).toBe(200)
 })

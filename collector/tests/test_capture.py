@@ -111,6 +111,19 @@ def test_dhcp_offer_fields_are_normalized_and_validated():
         normalize_tshark(tsv(DHCP_HEADER, [bad]), "seg")
 
 
+def test_dns_response_flag_reads_both_tshark_boolean_styles():
+    # Wireshark 4.x prints booleans as True/False; older versions print 1/0.
+    header = ["frame.time_epoch", "ip.src", "ip.dst", "dns.flags.response", "dns.id"]
+    rows = [
+        ["1", "192.168.1.20", "192.168.1.2", "False", "0x1"],
+        ["2", "192.168.1.2", "192.168.1.20", "True", "0x1"],
+        ["3", "192.168.1.20", "192.168.1.2", "0", "0x2"],
+        ["4", "192.168.1.2", "192.168.1.20", "1", "0x2"],
+    ]
+    observations, _ = normalize_tshark(tsv(header, rows), "seg")
+    assert [o["value"]["response"] for o in observations] == [False, True, False, True]
+
+
 def test_tshark_summary_reports_drops_or_unknown():
     assert capture_stats("Capturing on 'Ethernet'\n120 packets captured\n") == {
         "captured": 120,
@@ -206,6 +219,11 @@ def test_capture_finish_wires_stop_reason_rows_and_limits():
     assert len(observations) == 3
     assert entry["state"] == "truncated"
     assert entry["dropped"] is None
+    # Another collector's timeout stopped the whole job, capture included (2026-11-10).
+    observations, entry = finish_capture(cut, "", 1, "aborted", "seg", 100000, False)
+    assert len(observations) == 3
+    assert entry["state"] == "truncated"
+    assert "途中終了" in entry["reason"]
     observations, entry = finish_capture("", "0 packets captured\n", 0, None, "seg", 100000, False)
     assert observations == []
     assert entry["state"] == "completed"

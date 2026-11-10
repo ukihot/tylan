@@ -1,4 +1,4 @@
-// P3 end to end: built editor + dist launcher + real Python job owner with a synthetic collector.
+// P3 end to end: built editor + checkout launcher + real Python job owner with a synthetic collector.
 // No network is scanned; the collector returns a fixed collection (AuditFixture is test-only).
 import { type ChildProcess, spawn } from 'node:child_process'
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -105,7 +105,7 @@ beforeAll(async () => {
       '-ExecutionPolicy',
       'Bypass',
       '-File',
-      resolve('dist/tylan.ps1'),
+      resolve('launcher/tylan.ps1'),
       '-Root',
       root,
       '-NoBrowser',

@@ -213,7 +213,8 @@ def normalize_tshark(tsv, segment, limit=100000, keep_names=False):
                 value = {
                     "ip": ip,
                     "destination": get("ip.dst"),
-                    "response": get("dns.flags.response") == "1",
+                    # Wireshark 4.x prints booleans as True/False, older versions as 1/0.
+                    "response": get("dns.flags.response") in ("1", "True"),
                     "rcode": get("dns.flags.rcode") or None,
                     "transaction": get("dns.id"),
                     "questionHash": digest(get("dns.qry.name")),
@@ -246,6 +247,8 @@ def capture_outcome(code, stderr, stopped, rows, parse_error):
         state, reason = "timedOut", "期限により観測途中終了"
     elif stopped == "capacity":
         state, reason = "truncated", "容量上限で観測を打ち切り。以降の通信は欠落しています"
+    elif stopped == "aborted":
+        state, reason = "truncated", "他の収集の停止に伴い観測途中終了。以降の通信は欠落しています"
     elif code:
         denied = re.search(r"permission|npcap|access is denied|privilege", stderr, re.I)
         prefix = "キャプチャ権限不足またはNpcap未設定" if denied else f"TShark異常終了({code})"

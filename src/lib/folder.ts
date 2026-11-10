@@ -1,8 +1,9 @@
-// Imperative shell: the tylan folder on the share, reached through tools\tylan.ps1 on 127.0.0.1.
-// Edge cannot write to SMB shares through the File System Access API, so that local helper does the I/O.
+// Imperative shell: the local data folder, reached through launcher\tylan.ps1 on 127.0.0.1.
+// That helper does the file I/O and runs the audit collector on the same host.
 export type Entry = { name: string; lastModified: string }
 export type Folder = {
-  info(): Promise<{ root: string; audit?: { available: boolean } }>
+  /** audit.missing: tools the audit needs but this host lacks (Python 3.12+, Nmap, TShark, Npcap). */
+  info(): Promise<{ root: string; audit?: { available: boolean; missing?: string[] } }>
   audit?(method: string, path: string, body?: unknown): Promise<unknown>
   /** dir: working | working/csv | published | archive */
   list(dir: string): Promise<Entry[]>
@@ -15,7 +16,7 @@ export type Folder = {
 export class ConflictError extends Error {}
 
 const unreachable =
-  'tylanの起動プログラムが終了しています（編集画面を開いたままPCがスリープした場合など）。tools\\tylan.cmd から起動し直してください。確定済みの変更はファイルに保存されています。'
+  'tylanの起動プログラムが終了しています（編集画面を開いたままPCがスリープした場合など）。launcher\\tylan.cmd から起動し直してください。確定済みの変更はファイルに保存されています。'
 
 /** The launcher opens the editor at http://127.0.0.1:<port>/?t=<token>; anything else has no folder. */
 export function launcherFolder(): Folder | null {
@@ -44,7 +45,7 @@ export function launcherFolder(): Folder | null {
       throw new ConflictError(await res.text())
     }
     if (!res.ok && res.status !== 404) {
-      throw new Error(`共有フォルダの操作に失敗しました（${res.status}：${await res.text()}）`)
+      throw new Error(`作業フォルダの操作に失敗しました（${res.status}：${await res.text()}）`)
     }
     return res
   }

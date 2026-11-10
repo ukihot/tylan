@@ -36,7 +36,8 @@ if ($Targets) {
   $ips = @(Get-Content -LiteralPath $Targets -Encoding UTF8)
   if ($ips.Count -gt 4096) { throw 'too many route targets' }
   $best = @($ips | ForEach-Object {
-    $ip = $_
+    # [string] drops the PSPath/PSDrive notes Get-Content adds; ConvertTo-Json hangs walking them.
+    $ip = [string]$_
     $parsed = [System.Net.IPAddress]::Parse($ip)
     if ($parsed.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { throw 'IPv4 only' }
     # No InterfaceIndex restriction: inspect the actual OS choice, including VPN host routes.

@@ -14,12 +14,12 @@
   import { type Collection, type Doc, ProjectSchema } from './lib/schema'
   import { createWorkspace } from './lib/store.svelte'
 
-  // Tests pass an in-memory folder; in use it is the share, reached through tools\tylan.cmd.
+  // Tests pass an in-memory folder; in use it is the local data folder, reached through launcher\tylan.cmd.
   let props: { folder?: Folder | null } = $props()
   const workspace = createWorkspace()
   // Read once at start: the folder never changes during a session.
   const folder = untrack(() => (props.folder === undefined ? launcherFolder() : props.folder))
-  // Editing always happens inside a JSON file in the shared tylan\working folder: no file, no editing.
+  // Editing always happens inside a JSON file in the data\working folder: no file, no editing.
   const files = folder ? createFileSession(workspace, folder) : null
   onMount(() => {
     if (!files) {
@@ -242,14 +242,14 @@
     {#if !files}
       <section class="panel">
         <p class="eyebrow">START</p>
-        <h2>tools フォルダの tylan.cmd から起動してください</h2>
+        <h2>launcher フォルダの tylan.cmd から起動してください</h2>
         <p>
-          Edgeは共有フォルダへ直接保存できないため、tylanは起動用の tylan.cmd
-          が保存を受け持ちます。editor.html
+          編集と現地監査は、tylanのソースを置いた調査用ホストで起動用の tylan.cmd
+          が保存・収集を受け持ちます。editor.html
           を直接開いた場合は、データが失われないよう編集を止めています。
         </p>
         <ol>
-          <li>エクスプローラーで tylan\tools フォルダを開きます。</li>
+          <li>エクスプローラーで tylan のソースの launcher フォルダを開きます。</li>
           <li>tylan.cmd をダブルクリックします。編集画面が開きます。</li>
           <li>
             編集が終わったら編集画面を閉じるだけです（裏で動く起動プログラムは数分で自動終了します）。
@@ -259,7 +259,7 @@
     {:else if !files.connected}
       <section class="panel">
         <p class="eyebrow">START</p>
-        <h2>共有フォルダに接続しています…</h2>
+        <h2>作業フォルダに接続しています…</h2>
         {#if files.message}
           <button type="button" onclick={() => files.connect()}>もう一度接続する</button>
         {/if}

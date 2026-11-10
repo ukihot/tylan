@@ -26,7 +26,7 @@ afterAll(async () => {
   await writeFile('.build/browser-versions.json', JSON.stringify(browserVersions, null, 2))
 })
 
-/** Runs the real tools\tylan.ps1 (Windows PowerShell 5.1) against a fresh tylan folder. */
+/** Runs the real launcher\tylan.ps1 (Windows PowerShell 5.1) against a fresh data folder. */
 async function startLauncher(name: string, json?: string) {
   const root = resolve('.build/launcher', name)
   await rm(root, { recursive: true, force: true })
@@ -36,7 +36,7 @@ async function startLauncher(name: string, json?: string) {
   }
   const ps = spawn(
     'powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolve('dist/tylan.ps1')].concat([
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolve('launcher/tylan.ps1')].concat([
       '-Root',
       root,
       '-NoBrowser',
@@ -121,7 +121,7 @@ test('起動プログラムは合言葉・Host・Origin・フォルダ・競合�
   expect(
     (await fetch(`${base}/api/file?path=working/..%2F..%2Fx.json`, { headers: h })).status,
   ).toBe(400)
-  expect((await fetch(`${base}/api/file?path=tools/editor.html`, { headers: h })).status).toBe(400)
+  expect((await fetch(`${base}/api/file?path=dist/editor.html`, { headers: h })).status).toBe(400)
   const put = (expect: string, body: string) =>
     fetch(`${base}/api/file?path=working/a.json&expect=${expect}`, {
       method: 'PUT',
@@ -150,7 +150,7 @@ test('起動プログラムは合言葉・Host・Origin・フォルダ・競合�
   expect(status).toBe(403)
 })
 
-test('tylan.cmd起動の編集画面で開く・図・PNG・自動保存・公開・CSVが共有フォルダへ届く', async () => {
+test('tylan.cmd起動の編集画面で開く・図・PNG・自動保存・公開・CSVが作業フォルダへ届く', async () => {
   const { root, url, base } = await startLauncher('日本語 空白', JSON.stringify(fixture()))
   const { context, requests, errors } = await watchedContext(browser, base)
   try {

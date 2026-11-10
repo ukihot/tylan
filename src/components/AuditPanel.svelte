@@ -85,6 +85,7 @@
   let adoptFailed = $state(false)
   let message = $state('')
   let error = $state('')
+  let missingTools = $state<string[]>([])
   let runId = $state('')
   let runState = $state<RunState | null>(null)
   let result = $state<CollectionResult | null>(null)
@@ -281,6 +282,7 @@
   })
   async function initialize() {
     try {
+      missingTools = (await folder.info()).audit?.missing ?? []
       profiles = await client!.call('audit/profiles')
       past = await client!.call('audit/past')
       const runs = await client!.call<{ runId: string }[]>('audit/runs')
@@ -632,6 +634,12 @@
     {#if !client}
       <p>監査用の起動プログラムが接続されていません。通常の台帳編集は利用できます。</p>
     {:else}
+      {#if missingTools.length}
+        <div role="alert" class="error">
+          監査に必要なソフトがこのPCに見つかりません：{missingTools.join('、')}。導入してから
+          tylan.cmd を起動し直してください。不足したままの収集は「失敗」「未実施」になります。
+        </div>
+      {/if}
       {#if error}
         <div role="alert" class="error">{error}</div>
       {/if}
@@ -734,7 +742,7 @@
             詳細証跡の保持日数<input type="number" min="1" max="3650" bind:value={retentionDays}>
           </label>
           <p class="warning">
-            問い合わせ名は閲覧先を含み得ます。証跡共有のACLと保持期限を確認してください。期限後の削除は管理操作で行い、自動削除しません。
+            問い合わせ名は閲覧先を含み得ます。証跡フォルダの権限と保持期限を確認してください。期限後の削除は管理操作で行い、自動削除しません。
           </p>
         {/if}
         <div class="audit-features">

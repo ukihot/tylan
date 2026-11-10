@@ -31,6 +31,21 @@ test('IPv4 audit and IPv6 local-only controls are explicit and no scan starts on
   expect(calls).not.toContain('POST audit/runs')
 })
 
+test('tools missing on the audit host are listed before any audit starts', async () => {
+  const memory = memoryFolder()
+  memory.folder.info = async () => ({
+    root: 'D:\\tylan\\data',
+    audit: { available: true, missing: ['Nmap', 'Npcap'] },
+  })
+  memory.folder.audit = async () => []
+  const workspace = createWorkspace(fixture())
+  const files = createFileSession(workspace, memory.folder)
+  await memory.folder.write('working/network.json', JSON.stringify(fixture()), 'new')
+  await files.open('network.json')
+  const screen = await render(AuditPanel, { workspace, files, folder: memory.folder })
+  await expect.element(screen.getByText(/見つかりません：Nmap、Npcap/)).toBeVisible()
+})
+
 type Routes = Record<string, unknown>
 async function mount(routes: Routes) {
   const memory = memoryFolder()
