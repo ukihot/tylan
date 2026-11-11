@@ -391,7 +391,7 @@ test('maker and open ports name new devices; a random MAC is flagged as a phone'
     ['スマホ・タブレット等（ランダムMAC）', 'other', null],
   ])
   const plan = await planImport(fixture(), scan, { ...options, selected: ['printer', 'phone'] })
-  const added = plan.doc.devices.slice(-2).sort((a, b) => b.name.localeCompare(a.name))
+  const added = plan.doc.devices.slice(-2).sort((a, b) => (a.name < b.name ? -1 : 1))
   expect(added.map((d) => [d.name, d.kind, d.manufacturer])).toEqual([
     ['Ricoh Company 192.168.1.42', 'printer', 'Ricoh Company'],
     ['ランダムMAC 192.168.1.43', 'other', null],

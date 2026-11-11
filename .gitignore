@@ -37,3 +37,6 @@ dist-ssr
 
 # Working data of the local launcher (JSON, published HTML, evidence). Back it up; git clean -x deletes it.
 /data/
+
+# Portable tool from `bun run build`; release/tylan is recreated on every build
+/release/

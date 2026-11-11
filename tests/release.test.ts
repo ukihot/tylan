@@ -110,21 +110,21 @@ test('editor.htmlを直接開くと編集できず、tylan.cmdからの起動を
   }
 })
 
-test('持ち出し用 dist/tylan は単体で編集画面と収集器を見つける', async () => {
+test('持ち出し用 release/tylan は単体で編集画面と収集器を見つける', async () => {
   const { url, base, token } = await startLauncher(
     'portable',
     JSON.stringify(fixture()),
-    'dist/tylan/launcher/tylan.ps1',
+    'release/tylan/launcher/tylan.ps1',
   )
   expect(await (await fetch(url)).text()).toBe(
-    await readFile('dist/tylan/dist/editor.html', 'utf8'),
+    await readFile('release/tylan/dist/editor.html', 'utf8'),
   )
   const info = await (
     await fetch(`${base}/api/info`, { headers: { 'X-Tylan-Token': token } })
   ).json()
   expect(info.audit.available).toBe(true)
-  expect(existsSync('dist/tylan/tylan.cmd')).toBe(true)
-  expect(existsSync('dist/tylan/collector/tests')).toBe(false)
+  expect(existsSync('release/tylan/tylan.cmd')).toBe(true)
+  expect(existsSync('release/tylan/collector/tests')).toBe(false)
 })
 
 test('起動プログラムは合言葉・Host・Origin・フォルダ・競合を検査する', async () => {

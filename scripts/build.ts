@@ -34,11 +34,11 @@ for (const [name, [specifier]] of Object.entries(lock.packages)) {
 }
 await writeFile('dist/THIRD-PARTY-LICENSES.txt', licenses.join('\n\n-----\n\n'))
 
-// dist/tylan/: the portable tool for survey laptops that have only Python 3.12+ and Nmap.
+// release/tylan/: the portable tool for survey laptops that have only Python 3.12+ and Nmap.
 // Copied by hand: this host -> file share -> laptop desktop. Keeps the checkout's relative layout,
 // so launcher\tylan.ps1 finds dist\editor.html and collector\ without changes. No data\ inside:
 // copying a new version over the old folder never touches the laptop's data\.
-const pkg = 'dist/tylan'
+const pkg = 'release/tylan'
 await rm(pkg, { recursive: true, force: true })
 const files = [
   'launcher/tylan.ps1',

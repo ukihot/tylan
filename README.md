@@ -69,8 +69,8 @@ DNS問い合わせ名は既定でハッシュだけを残します。名前を�
 
 Python 3.12以上とNmap（Npcap込み）だけのPCでも、ビルド済みの一式で編集・現地監査ができます。Wireshark（TShark）がない場合は通信観測だけ省略され、未実施として記録されます。Pythonは `python.exe` がPATHになくても `py.exe` から探します。
 
-1. このホストで `bun run build`。`dist\tylan\` が持ち出し用一式です（`tylan.cmd`・起動スクリプト・`editor.html`・収集器。`data\` は含みません）。
-2. `dist\tylan\` を共有フォルダへコピー → ノートPCのデスクトップへコピー。
+1. このホストで `bun run build`。`release\tylan\` が持ち出し用一式です（`tylan.cmd`・起動スクリプト・`editor.html`・収集器。`data\` は含みません）。ビルドのたびに `release\tylan\` と `dist\` は作り直されるので、中に他のファイルを置かないでください。
+2. `release\tylan\` を共有フォルダへコピー → ノートPCのデスクトップへコピー。
 3. 共有フォルダの台帳JSONを `デスクトップ\tylan\data\working\` へコピーし、`tylan.cmd` で起動して監査・取り込み。
 4. 終わったらそのJSONを共有フォルダへ上書きコピー。証跡を残す場合は `data\evidence\` も一緒にコピーします。
 
