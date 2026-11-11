@@ -1,0 +1,41 @@
+{
+  "date": "2026-11-11",
+  "scope": "Full UI/UX redesign of all eight editor destinations and the published viewer",
+  "checks": {
+    "lint": "bun run lint: passed (generated Hallmark QA artifacts excluded)",
+    "types": "bun run check: 0 errors, 0 warnings",
+    "unitAndBrowser": "bun run test: 66/66 passed on the final UI",
+    "build": "bun run build: editor and published viewer built",
+    "releaseUi": "tests/release.test.ts: 6/6 passed in final full release run, including Chromium, Edge, PNG, autosave, publication, CSV, offline viewer and XSS",
+    "auditE2E": "tests/audit-e2e.test.ts: 1/1 passed in final full release run",
+    "releaseOverall": "11 passed, 10 failed; launcher-audit contract cases failed with another owner is active and consequent completion timeouts. Do not describe the full release suite as passing.",
+    "interactions": [
+      "arrow-key tab navigation",
+      "advanced-filter disclosure",
+      "nine sample connections and their detail view",
+      "mobile menu closes after navigation",
+      "all eight sample assets on narrow screens",
+      "visible toolbar outside graph canvas on desktop and mobile",
+      "fit-view and actual PNG download"
+    ],
+    "visual": "25 editor screenshots at 1280, 1440, 1920 and 375; standalone viewer at desktop and phone; phone asset ledger inspected",
+    "hallmark": {
+      "rawRenderFails": 1,
+      "reflex": 0,
+      "staticWarnings": 3,
+      "explanation": "Gate 73 does not account for the Svelte Flow clipping viewport. It reports text from off-viewport nodes at screen coordinates occupied by the legend/footer. Those nodes are intentionally clipped; fit-view and panning restore them. Real toolbar overlap was fixed by a dedicated toolbar mount outside the canvas. No clean render pass claimed."
+    },
+    "kept": "15/15 links, 1/1 fields, 77/77 original handlers, 2/2 recorded headings, 1/1 figures"
+  },
+  "finishReview": {
+    "method": "in-thread",
+    "resolved": [
+      "table cell padding",
+      "toolbar overlap",
+      "dense connection labels moved to a separate ledger and selection details",
+      "narrow viewer and asset row labels"
+    ],
+    "material": "No stock imagery or missing asset slots; all views use project data"
+  },
+  "compare": ".hallmark/compare.html"
+}

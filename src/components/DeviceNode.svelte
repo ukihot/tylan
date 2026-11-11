@@ -24,11 +24,11 @@
   <strong>{d.label}</strong>
   {#if flow.viewport.zoom >= 0.55}
     <p>{d.ip}</p>
-    <small>{d.location} ·{valueLabels[d.observation]}</small>
+    <small>{d.location} /{valueLabels[d.observation]}</small>
   {/if}
   <div class={`badge ${d.badge.judgment}`}>
     {d.badge.label}
-    {d.badge.count > 1 ? ` · ${d.badge.count}件` : ''}
+    {d.badge.count > 1 ? ` / ${d.badge.count}件` : ''}
   </div>
   {#if d.hiddenConnections}
     <small>非表示の接続{d.hiddenConnections}件</small>

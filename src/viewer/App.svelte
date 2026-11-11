@@ -23,18 +23,21 @@
   </section>
 {:else}
   <div class="viewer-shell">
+    <div class="viewer-masthead">
+      <strong>tylan</strong>
+      <span>ネットワーク調査・管理</span>
+      <span>閲覧専用</span>
+    </div>
     <header>
       <div>
-        <p class="eyebrow">TYLAN · PUBLISHED SNAPSHOT</p>
         <h1>{doc.project.name}</h1>
         <p class="muted">
           データ版 r{String(doc.project.revision).padStart(4, '0')}
-          · 調査基準日{doc.project.surveyDate ?? '未設定'}
+          / 調査基準日{doc.project.surveyDate ?? '未設定'}
           <br>
-          生成日時{doc.project.generatedAt} · アプリ{doc.project.appVersion}
+          生成日時{doc.project.generatedAt} / アプリ{doc.project.appVersion}
         </p>
       </div>
-      <p class="badge">閲覧専用</p>
     </header>
     <Topology {doc} />
     <section class="panel">
@@ -66,21 +69,21 @@
                 doc?.locations.some((l) => l.id === d.locationId && l.name.includes(query)),
             ) as d}
               <tr>
-                <td>{d.name}</td>
-                <td>{valueLabels[d.kind]}</td>
-                <td>{d.model ?? '未確認'}</td>
-                <td>
+                <td data-label="名称">{d.name}</td>
+                <td data-label="種別">{valueLabels[d.kind]}</td>
+                <td data-label="型番">{d.model ?? '未確認'}</td>
+                <td data-label="IP">
                   {doc.ipAssignments
                     .filter((a) => doc?.ports.some((p) => p.id === a.portId && p.deviceId === d.id))
                     .map((a) => a.address)
                     .filter(Boolean)
                     .join(' / ') || '未確認'}
                 </td>
-                <td>
+                <td data-label="拠点・設置場所">
                   {siteName(d.siteId)}
                   /{doc.locations.find((l) => l.id === d.locationId)?.name ?? '未確認'}
                 </td>
-                <td>
+                <td data-label="追加公開項目">
                   {#each Object.entries(d).filter(([key]) =>
                     ['serial', 'owner', 'administrator', 'supportContact', 'notes'].includes(key),
                   ) as [key, value]}
@@ -130,15 +133,15 @@
               (r) => (!siteId || r.siteId === siteId) && (!roundId || r.roundId === roundId),
             ) as r}
               <tr>
-                <td>{r.itemNo}</td>
-                <td>{siteName(r.siteId)}</td>
-                <td>
+                <td data-label="No.">{r.itemNo}</td>
+                <td data-label="拠点">{siteName(r.siteId)}</td>
+                <td data-label="対象">
                   {r.targetRef
                     ? (doc.devices.find((d) => d.id === r.targetRef?.id)?.name ?? r.targetRef.id)
                     : '拠点総括'}
                 </td>
-                <td>{doc.auditRounds.find((a) => a.id === r.roundId)?.name}</td>
-                <td>
+                <td data-label="回次">{doc.auditRounds.find((a) => a.id === r.roundId)?.name}</td>
+                <td data-label="判定">
                   <span class={`badge ${r.judgment}`}>{valueLabels[r.judgment]}</span>
                   {#if r.finding}
                     <p>{r.finding}</p>
@@ -147,7 +150,7 @@
                     <p>{r.problem}</p>
                   {/if}
                 </td>
-                <td>{r.checkedDate ?? '未確認'}</td>
+                <td data-label="確認日">{r.checkedDate ?? '未確認'}</td>
               </tr>
             {/each}
           </tbody>
@@ -160,7 +163,7 @@
         {#each doc.evidence as e}
           <p>
             {e.description}
-            ·{e.referenceNumber ?? '管理番号未設定'} ·{e.storageLocation ?? '保管先未設定'}
+            /{e.referenceNumber ?? '管理番号未設定'} /{e.storageLocation ?? '保管先未設定'}
           </p>
         {/each}
       </section>
@@ -171,7 +174,7 @@
         {#each doc.actionItems as a}
           <p>
             {a.content}
-            ·{valueLabels[a.progress]} ·{a.assignee ?? '担当未定'} ·{a.dueDate ?? '期限未定'}
+            /{valueLabels[a.progress]} /{a.assignee ?? '担当未定'} /{a.dueDate ?? '期限未定'}
           </p>
         {/each}
       </section>

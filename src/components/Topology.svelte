@@ -43,7 +43,9 @@
   let selectedId = $state('')
   let selectedEdge = $state('')
   let confirmLayout = $state(false)
+  let showConnections = $state(false)
   let root: HTMLDivElement | undefined = $state()
+  let toolbarTarget: HTMLDivElement | undefined = $state()
   const activeSite = $derived(
     doc.sites.some((s) => s.id === siteId) ? siteId : (doc.sites[0]?.id ?? ''),
   )
@@ -66,7 +68,7 @@
     }),
   )
   let nodes = $derived(graph.nodes)
-  let edges = $derived(graph.edges)
+  let edges = $derived(graph.edges.map((edge) => ({ ...edge, label: undefined })))
   const selectedDevice = $derived(doc.devices.find((d) => d.id === selectedId))
   const edge = $derived(doc.links.find((l) => l.id === selectedEdge))
   const moveCount = $derived(
@@ -122,12 +124,11 @@
 <section class="panel topology-panel">
   <div class="section-head">
     <div>
-      <p class="eyebrow">NETWORK MAP</p>
       <h2>トポロジー</h2>
     </div>
-    <span>{graph.matchedCount}機器 ·{edges.length}接続</span>
+    <span>{graph.matchedCount}機器 /{edges.length}接続</span>
   </div>
-  <div class="toolbar wrap">
+  <header class="toolbar wrap">
     <label>
       拠点<select
         value={activeSite}
@@ -197,7 +198,7 @@
             VLAN・セグメント<select bind:value={segmentId}>
               <option value="">すべて</option>
               {#each doc.segments.filter((s) => s.siteId === activeSite) as s}
-                <option value={s.id}>{s.name} · VLAN{s.vlanId ?? '不明'}</option>
+                <option value={s.id}>{s.name} / VLAN{s.vlanId ?? '不明'}</option>
               {/each}
             </select>
           </label>
@@ -229,7 +230,7 @@
     {#if workspace}
       <button type="button" onclick={() => (confirmLayout = true)}>自動配置</button>
     {/if}
-  </div>
+  </header>
   {#if confirmLayout}
     <div class="notice">
       固定されていない{moveCount}機器と不明端点を再配置します。取り消し可能です。<button
@@ -244,19 +245,26 @@
       <button type="button" onclick={() => (confirmLayout = false)}>中止</button>
     </div>
   {/if}
+  <div class="diagram-options">
+    <label class="check">
+      <input type="checkbox" bind:checked={showConnections}>接続一覧を表示
+    </label>
+    <span class="hint">配線を選択すると接続の詳細を表示します。</span>
+  </div>
   <div class="map-layout">
     <div class="graph-export" bind:this={root}>
       <div class="map-caption">
         <strong>
           {activeLayout?.name ?? '物理構成図'}
-          ·{doc.sites.find((s) => s.id === activeSite)?.name ?? '拠点未登録'}
+          /{doc.sites.find((s) => s.id === activeSite)?.name ?? '拠点未登録'}
         </strong>
         <small>
           {doc.project.name}
-          · r{String(doc.project.revision).padStart(4, '0')}
-          · 調査基準日{doc.project.surveyDate ?? '未設定'}
+          / r{String(doc.project.revision).padStart(4, '0')}
+          / 調査基準日{doc.project.surveyDate ?? '未設定'}
         </small>
       </div>
+      <div class="graph-toolbar export-omit" bind:this={toolbarTarget}></div>
       <div class="flow-container">
         {#key `${activeSite}:${activeLayout?.id ?? ''}`}
           <SvelteFlow
@@ -291,6 +299,7 @@
             <MiniMap pannable zoomable />
             <Controls showLock={false} />
             <GraphActions
+              {toolbarTarget}
               element={root}
               title={`topology-r${doc.project.revision}`}
               focusIds={graph.matchedIds}
@@ -318,6 +327,9 @@
     {#if selectedDevice || edge}
       <aside class="detail map-detail">
         <h3>{selectedDevice?.name ?? '接続の詳細'}</h3>
+        {#if edge}
+          <p class="connection-summary">{graph.edges.find((item) => item.id === edge.id)?.label}</p>
+        {/if}
         <dl>
           {#each Object.entries(selectedDevice ?? edge ?? {}) as [key, value]}
             <dt>{labels[key] ?? key}</dt>
@@ -359,7 +371,7 @@
           <p>
             <span class={`badge ${r.judgment}`}>{valueLabels[r.judgment]}</span>
             No.{r.itemNo}
-            ·{r.checkedDate ?? '未確認'}
+            /{r.checkedDate ?? '未確認'}
           </p>
         {:else}
           <p class="muted">監査記録なし</p>
@@ -367,6 +379,43 @@
       </aside>
     {/if}
   </div>
+  {#if showConnections}
+    <div class="table-wrap connection-register">
+      <table>
+        <caption>
+          表示中の接続
+        </caption>
+        <thead>
+          <tr>
+            <th>両端ポート・速度・媒体・VLAN・監査</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each graph.edges as connection (connection.id)}
+            <tr class:selected={selectedEdge === connection.id}>
+              <td>{connection.label}</td>
+              <td>
+                <button
+                  type="button"
+                  onclick={() => {
+                    selectedEdge = connection.id
+                    selectedId = ''
+                  }}
+                >
+                  詳細
+                </button>
+              </td>
+            </tr>
+          {:else}
+            <tr>
+              <td colspan="2" class="empty">表示できる接続はありません。</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
   {#if !doc.sites.length}
     <p class="empty">開始・プロジェクトで拠点を登録してください。</p>
   {/if}

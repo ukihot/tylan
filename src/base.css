@@ -1,0 +1,58 @@
+/* Hallmark · foundation: app screen · theme: 1998 infrastructure console · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 · weakest: E, instant focus and motion-free controls throughout */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html,
+body {
+  overflow-x: clip;
+}
+html {
+  scrollbar-color: var(--control-edge) var(--chrome);
+  scroll-padding-top: var(--space-md);
+}
+body {
+  margin: 0;
+  background: var(--chrome);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--text-md);
+  line-height: 1.6;
+  font-synthesis: none;
+  caret-color: var(--accent);
+}
+::selection {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+[hidden] {
+  /* biome-ignore lint/complexity/noImportantStyles: hidden must override component display rules. */
+  display: none !important;
+}
+img,
+video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+svg {
+  display: block;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: enforce the user reduced-motion preference over library styles. */
+    animation: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: enforce the user reduced-motion preference over library styles. */
+    transition: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: enforce the user reduced-motion preference over library styles. */
+    scroll-behavior: auto !important;
+  }
+}

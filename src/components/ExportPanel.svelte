@@ -60,8 +60,7 @@
     })
   }
 </script>
-<section class="panel">
-  <p class="eyebrow">VALIDATION & PUBLISH</p>
+<section class="panel export-panel">
   <h2>検証・書き出し</h2>
   <div class="stats">
     <div>
@@ -155,10 +154,11 @@
         previewed !== settingsKey}
       onclick={viewer}
     >
-      閲覧用HTMLを公開（published\viewer.html）
+      閲覧用HTMLを公開
     </button>
   </div>
   <p class="hint">
+    公開先：published\viewer.html。
     保存済みのJSONの版で作ります。前の viewer.html は archive
     へ移します。以後の変更は、もう一度公開するまで閲覧用HTMLに反映されません。
   </p>

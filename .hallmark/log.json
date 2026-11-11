@@ -1,0 +1,54 @@
+[
+ {
+  "date": "2026-11-11",
+  "mode": "redesign",
+  "depth": "full",
+  "scope": "app",
+  "shape": "app screen",
+  "theme": "1998 infrastructure console (by request)",
+  "axes": "mid/system-sans/cool",
+  "hero": "not applicable: working app",
+  "nav": "eight existing task destinations with system line icons and a mobile menu",
+  "footer": "compact operational disclaimer",
+  "imagery": "the real interactive network graph; no stock assets",
+  "photos": [],
+  "entry": "src/App.svelte and src/viewer/App.svelte",
+  "fingerprint": {
+   "shell": "silver task tree",
+   "head": "navy application masthead",
+   "body": "ruled registry",
+   "controls": "square native-style commands",
+   "diagram": "light wiring canvas",
+   "detail": "list and inspector"
+  },
+  "sections": [
+   "file manager",
+   "project register",
+   "asset registry",
+   "ports and connections",
+   "network settings",
+   "audit",
+   "action items",
+   "validation and publication",
+   "published viewer"
+  ],
+  "signature": "asset ledger with type, model and IP; wiring canvas with a separate connection register",
+  "waived": [],
+  "prompt": "UI/UXとCSSを全面的に書き直す。1998年時代のインフラ業務ツールを想起するレトロなデザイン。",
+  "review": {
+   "method": "in-thread",
+   "findingsResolved": [
+    "restore table cell padding and keep one sticky table head",
+    "move graph commands into a real toolbar outside the panning viewport",
+    "move dense connection labels to a selectable ledger",
+    "label every narrow viewer and asset row"
+   ],
+   "automationNote": "Rendered occlusion check reports off-viewport graph text behind the canvas clipping boundary; manually checked against screenshots and fit-view/PNG interactions. No clean render pass claimed."
+  },
+  "material": {
+   "real": "existing routes, dataset schema, handlers, sampleDoc supplied by the project",
+   "standins": [],
+   "needed": []
+  }
+ }
+]

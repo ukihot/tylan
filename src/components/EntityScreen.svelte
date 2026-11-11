@@ -121,10 +121,9 @@
   }
 </script>
 
-<section class="panel">
+<section class="panel entity-panel">
   <div class="section-head">
     <div>
-      <p class="eyebrow">REGISTER</p>
       <h2>{title}</h2>
     </div>
     <button type="button" class="primary" disabled={!!draft} onclick={add}>{title}を追加</button>
@@ -181,13 +180,17 @@
         <thead>
           <tr>
             <th>名称・対象</th>
+            {#if collection === 'devices'}
+              <th>種別・型番</th>
+              <th>IPアドレス</th>
+            {/if}
             <th>状態・識別</th>
           </tr>
         </thead>
         <tbody>
           {#each records as record (record.id)}
             <tr class:selected={current?.id === record.id}>
-              <td>
+              <td data-label="名称・対象">
                 <button
                   disabled={!!draft}
                   type="button"
@@ -202,21 +205,36 @@
                   {entityTitle(record, doc)}
                 </button>
               </td>
-              <td class="muted">
-                {display(
-                  'judgment' in record
-                    ? record.judgment
-                    : 'progress' in record
-                      ? record.progress
-                      : 'observation' in record
-                        ? record.observation
-                        : record.id,
-                )}
+              {#if collection === 'devices'}
+                <td data-label="種別・型番">
+                  {'kind' in record && record.kind ? (valueLabels[record.kind] ?? record.kind) : ''}
+                  <small class="cell-secondary">
+                    {'model' in record ? (record.model ?? '型番未確認') : ''}
+                  </small>
+                </td>
+                <td class="cell-address" data-label="IPアドレス">
+                  {doc.ipAssignments
+                    .filter((a) =>
+                      doc.ports.some((p) => p.id === a.portId && p.deviceId === record.id),
+                    )
+                    .map((a) => a.address)
+                    .filter(Boolean)
+                    .join(' / ') || '未確認'}
+                </td>
+              {/if}
+              <td class="muted" data-label="状態・識別">
+                {'judgment' in record
+                  ? display(record.judgment)
+                  : 'progress' in record
+                    ? display(record.progress)
+                    : 'observation' in record
+                      ? display(record.observation)
+                      : record.id}
               </td>
             </tr>
           {:else}
             <tr>
-              <td colspan="2" class="empty">
+              <td colspan={collection === 'devices' ? 4 : 2} class="empty">
                 まだ登録されていません。{title}を追加して調査を始めます。
               </td>
             </tr>
@@ -272,7 +290,7 @@
         {#if collection === 'devices'}
           <p>
             <a href={`#/ports/ports?target=${current.id}`}>関連ポート・接続へ</a>
-            ·<a href={`#/audit/auditResults?target=${current.id}`}>関連する監査へ</a>
+            <a href={`#/audit/auditResults?target=${current.id}`}>関連する監査へ</a>
           </p>
           <button
             type="button"
@@ -304,7 +322,7 @@
             .at(-1)}
           <p class="notice">
             前回結果：{previous
-              ? `${valueLabels[previous.judgment]} · ${previous.checkedDate ?? '確認日未設定'} · ${previous.finding ?? ''}`
+              ? `${valueLabels[previous.judgment]} / ${previous.checkedDate ?? '確認日未設定'} / ${previous.finding ?? ''}`
               : '記録なし'}
           </p>
           <button

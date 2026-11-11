@@ -1,0 +1,12 @@
+tools/
+before/
+after/
+render/
+*.png
+before.json
+before.txt
+compare.html
+preview.mjs
+viewer-preview.html
+viewer/
+review-*.txt

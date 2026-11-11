@@ -1,0 +1,19 @@
+{
+  "scanned": "2026-11-11",
+  "findings": {
+    "fonts": "src/app.css:3 Yu Gothic UI / Meiryo; replaced per explicit UI rewrite",
+    "palette": "src/app.css:10 navy/cyan default; no locked design or brand",
+    "framework": "package.json:35 Svelte 5 / Vite 8 / Svelte Flow",
+    "screens": "src/lib/routes.ts:10 eight editor destinations; src/viewer/App.svelte published viewer",
+    "motion": "src/app.css:60 button background transitions"
+  },
+  "preserve": [
+    "all routes, fields, file sessions, business handlers, data schema, published viewer",
+    "existing loading, empty, error and full states"
+  ],
+  "introduce": [
+    "1998 infrastructure console by request",
+    "silver chrome, navy selection, native system type, raised controls",
+    "compact project register, accessible mobile menu, labelled mobile viewer rows"
+  ]
+}

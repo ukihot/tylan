@@ -625,7 +625,6 @@
   <section class="panel audit-panel" aria-label="現地LAN自動監査">
     <div class="section-head">
       <div>
-        <p class="eyebrow">ON-SITE AUDIT</p>
         <h2>現地LANを調べる</h2>
       </div>
     </div>
@@ -708,7 +707,7 @@
             {#each addressChoices as address}
               <option value={`${address.ifIndex}:${address.address}`}>
                 {inventory?.adapters.find((n) => n.ifIndex === address.ifIndex)
-                  ?.name} ·{address.address}
+                  ?.name} /{address.address}
                 /{address.prefixLength}
               </option>
             {/each}
@@ -783,7 +782,7 @@
           {#if executionPlan}
             <div class="confirm-box">
               <p>
-                送信元{executionPlan.source} · 対象{executionPlan.targets.length} · 計画{executionPlan.hash}
+                送信元{executionPlan.source} / 対象{executionPlan.targets.length} / 計画{executionPlan.hash}
               </p>
               <ul>
                 {#each executionPlan.routes as route}
@@ -877,7 +876,7 @@
       {#if runId}
         <div class="confirm-box">
           <p role="status">
-            {`実行 ${runId} · ${runState ? (stateLabels[runState.state] ?? runState.state) : '受付未確認'}${active ? ` · ${stageName}` : ''}`}
+            {`実行 ${runId} / ${runState ? (stateLabels[runState.state] ?? runState.state) : '受付未確認'}${active ? ` / ${stageName}` : ''}`}
           </p>
           {@render stepper('実行の段階', runSteps)}
           {#if active}
@@ -914,11 +913,11 @@
           </p>
         {/if}
         <p class="muted">
-          観測点{String(result.scope.observationPoint ?? '不明')} · フィルター{String(
+          観測点{String(result.scope.observationPoint ?? '不明')} / フィルター{String(
             result.scope.captureFilter ?? 'なし',
           )}
           {#if result.scope.retainUntil}
-            · 詳細証跡の保持期限{String(result.scope.retainUntil)}
+            / 詳細証跡の保持期限{String(result.scope.retainUntil)}
           {/if}
         </p>
         <ul>
@@ -928,7 +927,7 @@
               ：{collectorLabels[String(collector.state)] ?? String(collector.state)}
               {String(collector.reason ?? '')}
               {#if collector.name === 'capture' && collector.state !== 'skipped'}
-                {`（パケット ${collector.captured ?? '取得不能'} · ドロップ ${collector.dropped ?? '取得不能'} · 行 ${collector.rows ?? '-'} · 集計外 ${collector.omitted ?? 0}）`}
+                {`（パケット ${collector.captured ?? '取得不能'} / ドロップ ${collector.dropped ?? '取得不能'} / 行 ${collector.rows ?? '-'} / 集計外 ${collector.omitted ?? 0}）`}
               {/if}
             </li>
           {/each}
@@ -938,7 +937,7 @@
             採用先セグメント<select bind:value={segmentId}>
               <option value="">選択</option>
               {#each doc.segments.filter((s) => s.siteId === profile.siteId) as segment}
-                <option value={segment.id}>{segment.name} ·{segment.cidr ?? 'CIDR未確認'}</option>
+                <option value={segment.id}>{segment.name} /{segment.cidr ?? 'CIDR未確認'}</option>
               {/each}
             </select>
           </label>
@@ -970,7 +969,7 @@
                     {String(observation.value.mac ?? 'MAC未取得')}
                   </td>
                   <td>
-                    {observation.source} ·{observation.observedAt}
+                    {observation.source} /{observation.observedAt}
                     <br>
                     {JSON.stringify(observation.value.ports ?? [])}
                   </td>
@@ -995,7 +994,7 @@
           </table>
         </div>
         {#if linkObservations.length}
-          <h3>接続候補（スイッチ情報） · 両端を対応付けた候補だけを推定として採用</h3>
+          <h3>接続候補（スイッチ情報） / 両端を対応付けた候補だけを推定として採用</h3>
           <div class="table-scroll">
             <table>
               <thead>
@@ -1090,7 +1089,7 @@
               >
               {#if obs.type === 'adComputer'}
                 <span>
-                  AD：{String(obs.value.name)} ·{String(obs.value.operatingSystem ?? 'OS不明')}
+                  AD：{String(obs.value.name)} /{String(obs.value.operatingSystem ?? 'OS不明')}
                   （AD登録は稼働・IPを保証しません）
                 </span>
                 <select
@@ -1108,10 +1107,10 @@
                 </select>
               {:else}
                 <span>
-                  DHCPスコープ：{String(obs.value.scopeId)}/{String(obs.value.subnetMask)} ·{String(
+                  DHCPスコープ：{String(obs.value.scopeId)}/{String(obs.value.subnetMask)} /{String(
                     obs.value.start,
                   )}
-                  ～{String(obs.value.end)} · サーバー{String(obs.value.server)}
+                  ～{String(obs.value.end)} / サーバー{String(obs.value.server)}
                   （記録済みのスコープは上書きしません）
                 </span>
               {/if}
@@ -1122,7 +1121,7 @@
         {#each result.findings as finding}
           <label class="audit-finding">
             <input type="checkbox" bind:checked={selected[finding.id]}>
-            No.{finding.itemNo} ·{finding.status}
+            No.{finding.itemNo} /{finding.status}
             ：{finding.reason}
             <small>次の確認：{finding.nextCheck}</small>
           </label>
@@ -1153,7 +1152,7 @@
         {/if}
         {#if preview}
           <div class="audit-preview">
-            <h3>未採用プレビュー · 物理配線は生成しません</h3>
+            <h3>未採用プレビュー / 物理配線は生成しません</h3>
             <Topology doc={preview} />
           </div>
         {/if}
@@ -1171,7 +1170,7 @@
         </button>
         {#each past as old}
           <div>
-            <span>{old.runId} ·{old.state}</span>
+            <span>{old.runId} /{old.state}</span>
             <button
               type="button"
               disabled={busy || active}
@@ -1202,24 +1201,24 @@
               : '同じ実行条件'}
           </p>
           <p>
-            {`追加 ${diff.added.length}件 · 変更 ${diff.changed.length}件 · 今回未観測 ${diff.unobserved.length}件`}
+            {`追加 ${diff.added.length}件 / 変更 ${diff.changed.length}件 / 今回未観測 ${diff.unobserved.length}件`}
           </p>
           <h4>追加（今回初めて観測）</h4>
           <ul>
             {#each diff.added as device}
-              <li>{device.ip} ·{device.mac ?? 'MAC未取得'}</li>
+              <li>{device.ip} /{device.mac ?? 'MAC未取得'}</li>
             {/each}
           </ul>
           <h4>変更</h4>
           <ul>
             {#each diff.changed as change}
-              <li>{change.ip} ·{change.fields.join('・')}：{change.before} →{change.after}</li>
+              <li>{change.ip} /{change.fields.join('・')}：{change.before} →{change.after}</li>
             {/each}
           </ul>
           <h4>今回未観測（撤去とは判断しません）</h4>
           <ul>
             {#each diff.unobserved as device}
-              <li>{device.ip} ·{device.mac ?? 'MAC未取得'}</li>
+              <li>{device.ip} /{device.mac ?? 'MAC未取得'}</li>
             {/each}
           </ul>
         </div>
@@ -1230,89 +1229,85 @@
 
 <style>
   fieldset {
-    border: 1px solid var(--border, #dce1e6);
-    border-radius: 8px;
-    padding: 16px;
-    margin: 16px 0;
+    margin: var(--space-md) 0;
+    padding: var(--space-sm);
+    border: 1px solid var(--line);
+    border-radius: 0;
   }
   .audit-options {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 12px;
-    margin: 12px 0;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    gap: var(--space-sm);
+    margin: var(--space-sm) 0;
   }
   label {
     display: grid;
-    gap: 6px;
+    gap: var(--space-2xs);
+    min-width: 0;
   }
   .audit-features {
     display: flex;
     flex-wrap: wrap;
-    gap: 14px;
-    margin: 16px 0;
+    gap: var(--space-sm);
+    margin: var(--space-md) 0;
   }
-  label.inline {
-    display: flex;
-    align-items: center;
-  }
+  label.inline,
   .audit-features label {
     display: flex;
     align-items: center;
+    gap: var(--space-xs);
+    min-height: 32px;
   }
   .audit-finding {
-    padding: 10px;
-    border-bottom: 1px solid #e1e5e8;
-    grid-template-columns: auto 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: var(--space-sm) 0;
+    border-bottom: 1px solid var(--line);
   }
   .audit-finding small {
     grid-column: 2;
   }
   .audit-preview {
     height: 650px;
-    margin-top: 20px;
-  }
-  .table-scroll {
-    overflow: auto;
+    margin-top: var(--space-md);
   }
   button {
-    margin: 4px;
+    margin: var(--space-2xs);
   }
   .steps {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 0;
+    margin: var(--space-sm) 0;
     padding: 0;
-    margin: 12px 0;
     list-style: none;
     counter-reset: step;
   }
   .steps li {
     counter-increment: step;
-    padding: 4px 10px;
-    border: 1px solid #c9d1d9;
-    border-radius: 999px;
-    color: #57606a;
-    font-size: 0.9em;
+    padding: var(--space-xs) var(--space-sm);
+    border-bottom: 2px solid var(--line);
+    color: var(--muted);
+    font-size: 13px;
   }
   .steps li::before {
     content: counter(step) ". ";
   }
   .steps li.done {
-    border-color: #2da44e;
-    color: #1a7f37;
+    border-color: var(--success-line);
+    color: var(--success-ink);
   }
   .steps li.done::before {
     content: "✓ ";
   }
   .steps li.current {
-    border-color: #0969da;
-    background: #ddf4ff;
-    color: #0550ae;
-    font-weight: 600;
+    border-color: var(--accent);
+    background: var(--info-face);
+    color: var(--info-ink);
+    font-weight: 700;
   }
   .steps li.failed {
-    border-color: #cf222e;
-    color: #cf222e;
+    border-color: var(--error-line);
+    color: var(--error-ink);
   }
   .steps li.failed::before {
     content: "× ";
@@ -1325,39 +1320,45 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 4px 10px;
+    gap: var(--space-2xs) var(--space-sm);
+    font-variant-numeric: tabular-nums;
   }
   .meter progress {
     flex: 1 1 160px;
     min-width: 120px;
     max-width: 360px;
-    height: 10px;
+    height: 16px;
+    accent-color: var(--accent);
   }
   .busy {
-    margin: 8px 0;
+    margin: var(--space-xs) 0;
   }
   .job-chip {
     position: fixed;
     right: 16px;
     bottom: 16px;
-    z-index: 20;
+    z-index: var(--z-toast);
     display: grid;
-    gap: 4px;
-    width: min(360px, calc(100vw - 32px));
-    padding: 10px 14px;
-    border: 1px solid #0969da;
-    border-radius: 10px;
-    background: #fff;
-    box-shadow: 0 6px 20px rgb(0 0 0 / 0.15);
-    color: inherit;
+    gap: var(--space-2xs);
+    width: min(360px, calc(100% - 32px));
+    padding: var(--space-sm) var(--space-md);
+    border: 2px solid var(--accent);
+    border-radius: 0;
+    background: var(--chrome);
+    color: var(--ink);
     text-decoration: none;
   }
-  @media (prefers-reduced-motion: reduce) {
-    progress {
-      animation: none;
-    }
+  .job-chip:hover {
+    background: var(--control-hover);
+  }
+  .job-chip:active {
+    background: var(--control-pressed);
+  }
+  .job-chip:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
   }
   input[type="checkbox"] {
-    width: auto;
+    width: 16px;
   }
 </style>

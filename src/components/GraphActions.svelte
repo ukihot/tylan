@@ -7,16 +7,29 @@
     title,
     onsave,
     focusIds = [],
+    toolbarTarget,
   }: {
     element: HTMLDivElement | undefined
     title: string
     onsave?: (viewport: { x: number; y: number; zoom: number }) => void
     focusIds?: string[]
+    toolbarTarget?: HTMLDivElement
   } = $props()
   const flow = useSvelteFlow()
   let error = $state('')
   let busy = $state(false)
   let imageScope = $state('all')
+  function placeToolbar(node: HTMLDivElement, target: HTMLDivElement | undefined) {
+    target?.append(node)
+    return {
+      update(next: HTMLDivElement | undefined) {
+        next?.append(node)
+      },
+      destroy() {
+        node.remove()
+      },
+    }
+  }
   async function png() {
     if (!element) {
       return
@@ -26,13 +39,14 @@
     const previous = flow.getViewport()
     try {
       const bounds = flow.getNodesBounds(flow.getNodes())
-      const width = element.clientWidth
-      const height = element.clientHeight - 90
+      const canvas = element.querySelector('.svelte-flow')
+      const width = canvas?.clientWidth ?? element.clientWidth
+      const height = canvas?.clientHeight ?? element.clientHeight - 90
       if (imageScope === 'all') {
         await flow.setViewport(getViewportForBounds(bounds, width, height, 0.05, 2, 0.15))
       }
       const data = await toPng(element, {
-        backgroundColor: '#f8fafc',
+        backgroundColor: getComputedStyle(element).getPropertyValue('--map-bg').trim(),
         pixelRatio: 2,
         skipFonts: true,
         filter: (node) => !node.classList?.contains('export-omit'),
@@ -49,7 +63,7 @@
     }
   }
 </script>
-<div class="graph-actions export-omit">
+<div class="graph-actions export-omit" use:placeToolbar={toolbarTarget}>
   {#if onsave}
     <button type="button" onclick={() => onsave?.(flow.getViewport())}>表示範囲を保存</button>
   {/if}

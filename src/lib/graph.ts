@@ -255,7 +255,7 @@ export function toGraph(doc: GraphDoc, siteId: string, options: GraphOptions = {
         position: { x, y },
         width,
         height,
-        style: `width:${width}px;height:${height}px;background:var(--map-group);border:1px solid var(--map-group-border);border-radius:4px`,
+        style: `width:${width}px;height:${height}px;background:var(--map-group);border:1px solid var(--map-group-border);border-radius:0`,
         draggable: false,
         selectable: false,
         zIndex: -1,
