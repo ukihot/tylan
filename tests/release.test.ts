@@ -27,7 +27,7 @@ afterAll(async () => {
 })
 
 /** Runs the real launcher\tylan.ps1 (Windows PowerShell 5.1) against a fresh data folder. */
-async function startLauncher(name: string, json?: string) {
+async function startLauncher(name: string, json?: string, script = 'launcher/tylan.ps1') {
   const root = resolve('.build/launcher', name)
   await rm(root, { recursive: true, force: true })
   await mkdir(join(root, 'working'), { recursive: true })
@@ -36,7 +36,7 @@ async function startLauncher(name: string, json?: string) {
   }
   const ps = spawn(
     'powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolve('launcher/tylan.ps1')].concat([
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolve(script)].concat([
       '-Root',
       root,
       '-NoBrowser',
@@ -108,6 +108,23 @@ test('editor.htmlを直接開くと編集できず、tylan.cmdからの起動を
   } finally {
     await page.close()
   }
+})
+
+test('持ち出し用 dist/tylan は単体で編集画面と収集器を見つける', async () => {
+  const { url, base, token } = await startLauncher(
+    'portable',
+    JSON.stringify(fixture()),
+    'dist/tylan/launcher/tylan.ps1',
+  )
+  expect(await (await fetch(url)).text()).toBe(
+    await readFile('dist/tylan/dist/editor.html', 'utf8'),
+  )
+  const info = await (
+    await fetch(`${base}/api/info`, { headers: { 'X-Tylan-Token': token } })
+  ).json()
+  expect(info.audit.available).toBe(true)
+  expect(existsSync('dist/tylan/tylan.cmd')).toBe(true)
+  expect(existsSync('dist/tylan/collector/tests')).toBe(false)
 })
 
 test('起動プログラムは合言葉・Host・Origin・フォルダ・競合を検査する', async () => {

@@ -86,6 +86,7 @@
   let message = $state('')
   let error = $state('')
   let missingTools = $state<string[]>([])
+  let optionalTools = $state<string[]>([])
   let runId = $state('')
   let runState = $state<RunState | null>(null)
   let result = $state<CollectionResult | null>(null)
@@ -282,7 +283,9 @@
   })
   async function initialize() {
     try {
-      missingTools = (await folder.info()).audit?.missing ?? []
+      const audit = (await folder.info()).audit
+      missingTools = audit?.missing ?? []
+      optionalTools = audit?.optional ?? []
       profiles = await client!.call('audit/profiles')
       past = await client!.call('audit/past')
       const runs = await client!.call<{ runId: string }[]>('audit/runs')
@@ -638,6 +641,12 @@
           監査に必要なソフトがこのPCに見つかりません：{missingTools.join('、')}。導入してから
           tylan.cmd を起動し直してください。不足したままの収集は「失敗」「未実施」になります。
         </div>
+      {/if}
+      {#if optionalTools.length}
+        <p class="muted">
+          未導入（なしでも監査できます）：{optionalTools.join('、')}
+          。通信観測（ARP/DNS/DHCP）は未実施として記録されます。
+        </p>
       {/if}
       {#if error}
         <div role="alert" class="error">{error}</div>

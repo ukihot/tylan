@@ -50,11 +50,18 @@ function Find-Tool([string]$name, [string]$folder) {
   return [bool](Get-Command $name -ErrorAction SilentlyContinue)
 }
 # WindowsApps\python.exe is a Store stub that only prints an install hint, so run each candidate.
+# The python.org installer leaves python.exe off PATH by default but installs py.exe, so ask it too.
 function Find-Python {
-  foreach ($candidate in @(Get-Command python.exe -All -ErrorAction SilentlyContinue)) {
+  $candidates = @(Get-Command python.exe -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+  $launcher = Get-Command py.exe -ErrorAction SilentlyContinue
+  if ($launcher) {
+    try { $candidates += @(& $launcher.Source -3 -c 'import sys; print(sys.executable)' 2>$null) } catch { }
+  }
+  foreach ($candidate in $candidates) {
+    if (-not $candidate) { continue }
     try {
-      & $candidate.Source -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>$null
-      if ($LASTEXITCODE -eq 0) { return $candidate.Source }
+      & $candidate -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>$null
+      if ($LASTEXITCODE -eq 0) { return $candidate }
     } catch { }
   }
   return $null
@@ -65,9 +72,11 @@ function Audit-Info {
   $missing = @()
   if (-not $auditPython) { $missing += 'Python 3.12+' }
   if (-not (Find-Tool 'nmap.exe' 'Nmap')) { $missing += 'Nmap' }
-  if (-not (Find-Tool 'tshark.exe' 'Wireshark')) { $missing += 'Wireshark (TShark)' }
   if (-not (Test-Path -LiteralPath (Join-Path $env:SystemRoot 'System32\Npcap'))) { $missing += 'Npcap' }
-  @{ available = [bool]($auditPython -and (Test-Path -LiteralPath (Join-Path $CollectorRoot 'collector\job_owner.py'))); missing = $missing; protocolVersion = 1; onLinkOnly = $true; ipv6Capture = $false; ipv6Scan = $false }
+  # Without TShark the collector skips traffic observation and records it as not done.
+  $optional = @()
+  if (-not (Find-Tool 'tshark.exe' 'Wireshark')) { $optional += 'Wireshark (TShark)' }
+  @{ available = [bool]($auditPython -and (Test-Path -LiteralPath (Join-Path $CollectorRoot 'collector\job_owner.py'))); missing = $missing; optional = $optional; protocolVersion = 1; onLinkOnly = $true; ipv6Capture = $false; ipv6Scan = $false }
 }
 function Start-AuditOwner {
   if ($script:auditStarted) { return }

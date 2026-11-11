@@ -35,7 +35,7 @@ test('tools missing on the audit host are listed before any audit starts', async
   const memory = memoryFolder()
   memory.folder.info = async () => ({
     root: 'D:\\tylan\\data',
-    audit: { available: true, missing: ['Nmap', 'Npcap'] },
+    audit: { available: true, missing: ['Nmap', 'Npcap'], optional: ['Wireshark (TShark)'] },
   })
   memory.folder.audit = async () => []
   const workspace = createWorkspace(fixture())
@@ -44,6 +44,7 @@ test('tools missing on the audit host are listed before any audit starts', async
   await files.open('network.json')
   const screen = await render(AuditPanel, { workspace, files, folder: memory.folder })
   await expect.element(screen.getByText(/見つかりません：Nmap、Npcap/)).toBeVisible()
+  await expect.element(screen.getByText(/なしでも監査できます）：Wireshark/)).toBeVisible()
 })
 
 type Routes = Record<string, unknown>

@@ -65,6 +65,17 @@ bun run build
 
 DNS問い合わせ名は既定でハッシュだけを残します。名前を証跡に残す場合は保持日数を指定してください（期限後の削除は管理操作で行い、自動削除はしません）。収集中の結果は `%LOCALAPPDATA%\tylan\audit-runs\` に保持します。実LANでの確認項目は [受入手順](doc/acceptance.md#現地監査の受入現地ゲート) を参照してください。
 
+## 調査用ノートPCへの持ち出し
+
+Python 3.12以上とNmap（Npcap込み）だけのPCでも、ビルド済みの一式で編集・現地監査ができます。Wireshark（TShark）がない場合は通信観測だけ省略され、未実施として記録されます。Pythonは `python.exe` がPATHになくても `py.exe` から探します。
+
+1. このホストで `bun run build`。`dist\tylan\` が持ち出し用一式です（`tylan.cmd`・起動スクリプト・`editor.html`・収集器。`data\` は含みません）。
+2. `dist\tylan\` を共有フォルダへコピー → ノートPCのデスクトップへコピー。
+3. 共有フォルダの台帳JSONを `デスクトップ\tylan\data\working\` へコピーし、`tylan.cmd` で起動して監査・取り込み。
+4. 終わったらそのJSONを共有フォルダへ上書きコピー。証跡を残す場合は `data\evidence\` も一緒にコピーします。
+
+ツール更新時は新しい `tylan` フォルダを上書きコピーします。`data\` は同梱しないので消えません。手順は同梱の `使い方.txt` にもあります。
+
 ## 設計・受入
 
 - [要件定義](doc/requirements.md)

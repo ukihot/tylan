@@ -2,8 +2,12 @@
 // That helper does the file I/O and runs the audit collector on the same host.
 export type Entry = { name: string; lastModified: string }
 export type Folder = {
-  /** audit.missing: tools the audit needs but this host lacks (Python 3.12+, Nmap, TShark, Npcap). */
-  info(): Promise<{ root: string; audit?: { available: boolean; missing?: string[] } }>
+  /** audit.missing: tools the audit needs but this host lacks (Python 3.12+, Nmap, Npcap).
+   * audit.optional: absent tools the audit runs without (TShark: traffic observation is skipped). */
+  info(): Promise<{
+    root: string
+    audit?: { available: boolean; missing?: string[]; optional?: string[] }
+  }>
   audit?(method: string, path: string, body?: unknown): Promise<unknown>
   /** dir: working | working/csv | published | archive */
   list(dir: string): Promise<Entry[]>
@@ -16,7 +20,7 @@ export type Folder = {
 export class ConflictError extends Error {}
 
 const unreachable =
-  'tylanの起動プログラムが終了しています（編集画面を開いたままPCがスリープした場合など）。launcher\\tylan.cmd から起動し直してください。確定済みの変更はファイルに保存されています。'
+  'tylanの起動プログラムが終了しています（編集画面を開いたままPCがスリープした場合など）。tylan.cmd から起動し直してください。確定済みの変更はファイルに保存されています。'
 
 /** The launcher opens the editor at http://127.0.0.1:<port>/?t=<token>; anything else has no folder. */
 export function launcherFolder(): Folder | null {
