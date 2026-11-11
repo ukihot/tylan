@@ -271,7 +271,7 @@
   onMount(() => {
     profile.siteId = doc.sites[0]?.id ?? ''
     profile.roundId = doc.auditRounds.at(-1)?.id ?? ''
-    segmentId = doc.segments.find((s) => s.siteId === profile.siteId)?.id ?? ''
+    segmentId = ''
     checkedBy = doc.project.updatedBy ?? ''
     plannedDocumentId = doc.documentId ?? plannedDocumentId
     if (client) {
@@ -948,7 +948,13 @@
         <div class="audit-options">
           <label>
             採用先セグメント<select bind:value={segmentId}>
-              <option value="">選択</option>
+              <option value="">
+                自動（IPを含むセグメント。なければ調査範囲{(Array.isArray(result.profile.cidrs)
+                  ? result.profile.cidrs
+                  : []
+                ).join('・')}
+                から作成）
+              </option>
               {#each doc.segments.filter((s) => s.siteId === profile.siteId) as segment}
                 <option value={segment.id}>{segment.name} /{segment.cidr ?? 'CIDR未確認'}</option>
               {/each}
@@ -964,8 +970,23 @@
           <table>
             <thead>
               <tr>
-                <th>台帳に追加</th>
+                <th>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={deviceRows.length > 0 &&
+                        deviceRows.every((row) => row.ids.every((id) => selected[id]))}
+                      onchange={(e) => {
+                        for (const id of deviceRows.flatMap((row) => row.ids)) {
+                          selected[id] = e.currentTarget.checked
+                        }
+                      }}
+                    >
+                    台帳に追加（すべて）
+                  </label>
+                </th>
                 <th>IP / MAC</th>
+                <th>推定（MAC・ポートから）</th>
                 <th>見つけ方</th>
                 <th>台帳の機器との照合</th>
               </tr>
@@ -994,6 +1015,11 @@
                       <br>
                       {row.hostname}
                     {/if}
+                  </td>
+                  <td>
+                    <strong>{row.guess}</strong>
+                    <br>
+                    {row.vendor ?? (row.mac ? 'メーカー不明' : 'MAC未取得')}
                   </td>
                   <td>
                     {row.sources.join('・')}

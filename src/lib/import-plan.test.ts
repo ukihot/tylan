@@ -340,3 +340,61 @@ test('one PC seen in hundreds of ARP packets and both Nmap phases is one row', (
   expect([row.first, row.last]).toEqual([at(0), at(59)])
   expect(row.openPorts).toEqual(['445/tcp'])
 })
+
+test('a first audit of a site with no segments makes one from the scanned CIDR', async () => {
+  const empty = { ...fixture(), segments: [], ipAssignments: [], dhcpScopes: [] }
+  empty.ports = empty.ports.map((p) => ({ ...p, segmentIds: [] }))
+  const scan = {
+    ...result,
+    profile: { cidrs: ['192.168.4.0/24'] },
+    observations: [
+      { ...observation, id: 'a', value: { ...observation.value, ip: '192.168.4.11' } },
+      { ...observation, id: 'b', value: { ...observation.value, ip: '192.168.4.21', mac: null } },
+    ],
+  }
+  const auto = { ...options, segmentId: '', selected: ['a', 'b'] }
+  const plan = await planImport(empty, scan, auto)
+  expect(plan.doc.segments.map((s) => [s.name, s.cidr, s.siteId])).toEqual([
+    ['192.168.4.0/24', '192.168.4.0/24', options.siteId],
+  ])
+  expect(plan.doc.ipAssignments.map((a) => a.segmentId)).toEqual([
+    plan.doc.segments[0]!.id,
+    plan.doc.segments[0]!.id,
+  ])
+  expect(validate(plan.doc).errors).toEqual([])
+  expect((await planImport(empty, scan, auto)).doc).toEqual(plan.doc)
+  const outside = { ...scan, profile: { cidrs: ['10.0.0.0/24'] } }
+  await expect(planImport(empty, outside, auto)).rejects.toThrow(/192\.168\.4\.11 のセグメント/)
+})
+
+test('maker and open ports name new devices; a random MAC is flagged as a phone', async () => {
+  const at = { ...observation, value: { ...observation.value } }
+  const scan = {
+    ...result,
+    observations: [
+      {
+        ...at,
+        id: 'printer',
+        value: {
+          ip: '192.168.1.42',
+          mac: '58:38:79:be:1f:65',
+          vendor: 'Ricoh Company',
+          ports: [{ protocol: 'tcp', port: 9100, state: 'open', reason: 'syn-ack' }],
+        },
+      },
+      { ...at, id: 'phone', type: 'arp', value: { ip: '192.168.1.43', mac: '9e:da:7f:dc:ee:9f' } },
+    ],
+  }
+  const rows = groupDevices(scan.observations as never)
+  expect(rows.map((r) => [r.guess, r.kind, r.vendor])).toEqual([
+    ['プリンター・複合機', 'printer', 'Ricoh Company'],
+    ['スマホ・タブレット等（ランダムMAC）', 'other', null],
+  ])
+  const plan = await planImport(fixture(), scan, { ...options, selected: ['printer', 'phone'] })
+  const added = plan.doc.devices.slice(-2).sort((a, b) => b.name.localeCompare(a.name))
+  expect(added.map((d) => [d.name, d.kind, d.manufacturer])).toEqual([
+    ['Ricoh Company 192.168.1.42', 'printer', 'Ricoh Company'],
+    ['ランダムMAC 192.168.1.43', 'other', null],
+  ])
+  expect(added[0]!.notes).toMatch(/推定：プリンター・複合機.*9100\/tcp/)
+})

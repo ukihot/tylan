@@ -64,14 +64,10 @@ def normalize_nmap(xml, segment, when):
     for host in root.findall("host"):
         status = host.find("status")
         addresses = [a.get("addr") for a in host.findall("address") if a.get("addrtype") == "ipv4"]
-        mac = next(
-            (
-                a.get("addr", "").lower()
-                for a in host.findall("address")
-                if a.get("addrtype") == "mac"
-            ),
-            None,
-        )
+        mac_address = next((a for a in host.findall("address") if a.get("addrtype") == "mac"), None)
+        mac = mac_address.get("addr", "").lower() if mac_address is not None else None
+        # Nmap names the maker from its own OUI list (nmap-mac-prefixes).
+        vendor = (mac_address.get("vendor", "")[:100] or None) if mac_address is not None else None
         ports = []
         for port in host.findall("ports/port"):
             state = port.find("state")
@@ -97,6 +93,7 @@ def normalize_nmap(xml, segment, when):
                     {
                         "ip": address,
                         "mac": mac,
+                        "vendor": vendor,
                         "ports": ports,
                         "state": status.get("state") if status is not None else "unknown",
                         "reason": status.get("reason") if status is not None else None,

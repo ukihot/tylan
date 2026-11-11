@@ -64,7 +64,38 @@ export type DeviceRow = {
   first: string
   last: string
   openPorts: string[]
+  /** maker from Nmap's OUI list; null for random or unlisted MACs */
+  vendor: string | null
+  /** what the device probably is, from MAC and open ports only: always shown as a guess */
+  guess: string
+  kind: EntityMap['devices']['kind']
   sample: Observation
+}
+/** Phones and tablets randomize their Wi-Fi MAC per network: the locally administered bit is set. */
+export const randomMac = (mac: string | null) =>
+  !!mac && (Number.parseInt(mac.slice(0, 2), 16) & 2) === 2
+// ponytail: port/MAC heuristic only; add NetBIOS or reverse-DNS names if guesses prove too vague.
+function guessDevice(row: Pick<DeviceRow, 'mac' | 'openPorts'>) {
+  const has = (...ports: number[]) => ports.some((p) => row.openPorts.includes(`${p}/tcp`))
+  if (randomMac(row.mac)) {
+    return { guess: 'スマホ・タブレット等（ランダムMAC）', kind: 'other' as const }
+  }
+  if (has(9100, 515, 631)) {
+    return { guess: 'プリンター・複合機', kind: 'printer' as const }
+  }
+  if (has(135, 3389)) {
+    return { guess: 'Windows PC・サーバー', kind: 'pc' as const }
+  }
+  if (has(139, 445)) {
+    return { guess: 'NAS・ファイル共有', kind: 'nas' as const }
+  }
+  if (has(53)) {
+    return { guess: 'ルーター・DNS', kind: 'unknown' as const }
+  }
+  if (has(22, 23, 80, 443, 8080, 8443)) {
+    return { guess: '管理画面あり（ネットワーク機器等）', kind: 'unknown' as const }
+  }
+  return { guess: '不明（開いているポートなし）', kind: 'unknown' as const }
 }
 const ipOrder = (ip: string) => ip.split('.').reduce((n, octet) => n * 256 + Number(octet), 0)
 /** One row per observed device, keyed by ip:mac exactly as planImport merges them into one device.
@@ -89,6 +120,9 @@ export function groupDevices(observations: Observation[]): DeviceRow[] {
         first: obs.observedAt,
         last: obs.observedAt,
         openPorts: [],
+        vendor: null,
+        guess: '',
+        kind: 'unknown',
         sample: obs,
       }
       rows.set(key, row)
@@ -105,12 +139,16 @@ export function groupDevices(observations: Observation[]): DeviceRow[] {
       row.last = obs.observedAt
     }
     row.hostname ??= typeof v.hostname === 'string' && v.hostname ? v.hostname : null
+    row.vendor ??= typeof v.vendor === 'string' && v.vendor ? v.vendor : null
     for (const port of (v.ports as { port: number; protocol: string; state: string }[]) ?? []) {
       const name = `${port.port}/${port.protocol}`
       if (port.state === 'open' && !row.openPorts.includes(name)) {
         row.openPorts.push(name)
       }
     }
+  }
+  for (const row of rows.values()) {
+    Object.assign(row, guessDevice(row))
   }
   return [...rows.values()].sort((a, b) => ipOrder(a.ip) - ipOrder(b.ip))
 }
@@ -149,9 +187,6 @@ export async function planImport(original: Doc, input: unknown, options: ImportO
   if (doc.documentId !== options.documentId) {
     throw new Error('正本IDが変わりました')
   }
-  const segment = doc.segments.find(
-    (s) => s.id === options.segmentId && s.siteId === options.siteId,
-  )
   if (!doc.sites.some((s) => s.id === options.siteId)) {
     throw new Error('対象拠点を選んでください')
   }
@@ -212,7 +247,36 @@ export async function planImport(original: Doc, input: unknown, options: ImportO
   }
   batch.evidenceIds = [evidenceId]
   const conflicts: string[] = []
+  const scanned = (Array.isArray(result.profile.cidrs) ? result.profile.cidrs : []).map(String)
+  /** The chosen segment, or (segmentId '') the site segment holding the IP, else one made from
+   * the scanned CIDR holding it: a first audit of a site has no segments yet. */
+  const segmentFor = async (ip: string) => {
+    const site = doc.segments.filter((s) => s.siteId === options.siteId)
+    if (options.segmentId) {
+      const chosen = site.find((s) => s.id === options.segmentId)
+      return chosen?.cidr && inCidr(ip, chosen.cidr) ? chosen : undefined
+    }
+    const known = site.find((s) => s.cidr && inCidr(ip, s.cidr))
+    const cidr = scanned.find((c) => inCidr(ip, c))
+    if (known || !cidr) {
+      return known
+    }
+    const made = {
+      ...newEntity('segments', await identity('seg', `${options.siteId}:${cidr}`)),
+      siteId: options.siteId,
+      name: cidr,
+      cidr,
+    }
+    doc.segments.push(made)
+    return made
+  }
   const observationDevices = new Map<string, string>()
+  const selectedRows = new Map(
+    groupDevices(result.observations.filter((o) => selected.includes(o.id))).map((r) => [
+      `${r.ip}:${String(r.mac ?? '')}`,
+      r,
+    ]),
+  )
   const prior = (bindingKey: string) =>
     doc.importBatches
       ?.filter((b) => b.state === 'applied')
@@ -356,8 +420,9 @@ export async function planImport(original: Doc, input: unknown, options: ImportO
     if (!['device', 'arp'].includes(obs.type)) {
       continue
     }
-    if (!segment?.cidr || typeof v.ip !== 'string' || !inCidr(v.ip, segment.cidr)) {
-      throw new Error('観測IPのセグメントを確認してください')
+    const segment = typeof v.ip === 'string' ? await segmentFor(v.ip) : undefined
+    if (!segment) {
+      throw new Error(`観測IP ${String(v.ip)} のセグメントを確認してください`)
     }
     const bindingKey = `${result.runId}:${obs.id}:device`
     const known = prior(bindingKey)
@@ -387,12 +452,19 @@ export async function planImport(original: Doc, input: unknown, options: ImportO
       throw new Error('採用先の機器がありません')
     }
     if (!doc.devices.some((d) => d.id === deviceId)) {
+      const row = selectedRows.get(observedKey)
+      const label = row?.vendor ?? (randomMac(row?.mac ?? null) ? 'ランダムMAC' : '')
       doc.devices.push({
         ...newEntity('devices', deviceId),
-        name: String(v.hostname || v.ip).slice(0, 100),
+        name: String(row?.hostname || `${label} ${String(v.ip)}`.trim()).slice(0, 100),
+        kind: row?.kind ?? 'unknown',
+        manufacturer: row?.vendor ?? null,
         siteId: options.siteId,
         observation: 'observed',
         lastCheckedDate: options.now.slice(0, 10),
+        notes: row
+          ? `自動収集の推定：${row.guess}（MAC・開いているポート${row.openPorts.join(', ') || 'なし'}から。要確認）`
+          : null,
       })
     }
     observationDevices.set(obs.id, deviceId)
@@ -417,7 +489,7 @@ export async function planImport(original: Doc, input: unknown, options: ImportO
         ...newEntity('ipAssignments', await identity('ip', `${obs.id}:address`)),
         portId,
         segmentId: segment.id,
-        address: v.ip,
+        address: String(v.ip),
         mode:
           v.assignmentMode === 'static' || v.assignmentMode === 'dhcp'
             ? v.assignmentMode

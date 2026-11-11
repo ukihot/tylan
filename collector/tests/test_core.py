@@ -48,6 +48,13 @@ def test_nmap_missing_mac_filtered_and_partial_are_preserved():
     xml = '<nmaprun><host><status state="up" reason="arp-response"/><address addr="192.168.10.2" addrtype="ipv4"/><ports><port protocol="tcp" portid="445"><state state="filtered" reason="no-response"/></port></ports></host></nmaprun>'
     result = normalize_nmap(xml, "seg", "2026-11-06T12:00:00+09:00")
     assert result[0]["value"]["mac"] is None
+    assert result[0]["value"]["vendor"] is None
+    with_vendor = xml.replace(
+        "<ports>",
+        '<address addr="58:38:79:BE:1F:65" addrtype="mac" vendor="Ricoh Company"/><ports>',
+    )
+    value = normalize_nmap(with_vendor, "seg", "now")[0]["value"]
+    assert (value["mac"], value["vendor"]) == ("58:38:79:be:1f:65", "Ricoh Company")
     assert result[0]["value"]["ports"] == [
         {"protocol": "tcp", "port": 445, "state": "filtered", "reason": "no-response"}
     ]

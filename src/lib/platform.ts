@@ -20,3 +20,7 @@ export function createId(prefix: string) {
 export function nowJst() {
   return `${new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 19)}+09:00`
 }
+/** Default audit round name when left blank, e.g. 2026/11/11 (JST). */
+export function todayName() {
+  return nowJst().slice(0, 10).replaceAll('-', '/')
+}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { z } from 'zod'
+  import { todayName } from '../lib/platform'
   import { entityTitle, labels, unwrap, valueLabels } from '../lib/presentation'
   import { type Collection, type Doc, schemaSeed } from '../lib/schema'
   import type { Issue } from '../lib/validate'
@@ -221,6 +222,7 @@
         type={fieldKey.toLowerCase().endsWith('date') ? 'date' : 'text'}
         bind:value
         maxlength={fieldKey.endsWith('At') ? 40 : 100}
+        placeholder={/^auditRounds\.\d+\.name$/.test(path) ? todayName() : undefined}
       >
     </label>
   {/if}

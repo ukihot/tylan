@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { placementCount, removalReferences } from '../lib/commands'
-  import { createId } from '../lib/platform'
+  import { createId, todayName } from '../lib/platform'
   import { collectionLabels, draftFor, entityTitle, labels, valueLabels } from '../lib/presentation'
   import { entityHref } from '../lib/routes'
   import { type Collection, type EntityMap, entitySchemas, prefixes } from '../lib/schema'
@@ -84,6 +84,9 @@
   onDestroy(() => ondraftchange(false))
   function save() {
     const value = $state.snapshot(draft) as EntityMap[typeof collection]
+    if (collection === 'auditRounds' && !(value as EntityMap['auditRounds']).name.trim()) {
+      ;(value as EntityMap['auditRounds']).name = todayName()
+    }
     const ok =
       collection === 'auditRounds' && !doc.auditRounds.some((r) => r.id === value.id)
         ? workspace.startRound(value as EntityMap['auditRounds'])
