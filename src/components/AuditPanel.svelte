@@ -9,7 +9,13 @@
   import type { CollectionResult } from '../lib/collection-schema'
   import type { FileSession } from '../lib/file-session.svelte'
   import type { Folder } from '../lib/folder'
-  import { candidates, type Endpoint, migrateV2, planImport } from '../lib/import-plan'
+  import {
+    candidates,
+    type Endpoint,
+    groupDevices,
+    migrateV2,
+    planImport,
+  } from '../lib/import-plan'
   import { parseDocument, prepareExport } from '../lib/io'
   import { createId, nowJst } from '../lib/platform'
   import { compareRuns } from '../lib/run-diff'
@@ -129,9 +135,7 @@
         runState?.state ?? '',
       ),
   )
-  const deviceObservations = $derived(
-    result?.observations.filter((o) => o.type === 'device' || o.type === 'arp') ?? [],
-  )
+  const deviceRows = $derived(groupDevices(result?.observations ?? []))
   const linkObservations = $derived(
     result?.observations.filter((o) => o.type === 'physicalCandidate') ?? [],
   )
@@ -952,47 +956,69 @@
           </label>
           <label>確認者<input bind:value={checkedBy}></label>
         </div>
+        <h3>見つかった機器（{deviceRows.length}台）</h3>
+        <p class="muted">
+          収集結果はまだ台帳（JSON）に入っていません。チェックした機器だけを台帳へ追加します。既に台帳にある機器なら「照合先」でその機器を選ぶと、新しく作らずにその機器へ結び付けます。
+        </p>
         <div class="table-scroll">
           <table>
             <thead>
               <tr>
-                <th>採用候補</th>
+                <th>台帳に追加</th>
                 <th>IP / MAC</th>
-                <th>根拠</th>
-                <th>既存機器との照合</th>
+                <th>見つけ方</th>
+                <th>台帳の機器との照合</th>
               </tr>
             </thead>
             <tbody>
-              {#each deviceObservations as observation}
+              {#each deviceRows as row (row.ids[0])}
                 <tr>
                   <td>
                     <input
                       type="checkbox"
-                      aria-label={`${String(observation.value.ip)}を採用候補に選択`}
-                      bind:checked={selected[observation.id]}
+                      aria-label={`${row.ip}を台帳に追加`}
+                      checked={row.ids.every((id) => selected[id])}
+                      onchange={(e) => {
+                        for (const id of row.ids) {
+                          selected[id] = e.currentTarget.checked
+                        }
+                      }}
                     >
                   </td>
                   <td>
-                    {String(observation.value.ip)}
+                    {row.ip}
+                    {row.ip === result.profile.source ? '（この調査用PC）' : ''}
                     <br>
-                    {String(observation.value.mac ?? 'MAC未取得')}
+                    {row.mac ?? 'MAC未取得'}
+                    {#if row.hostname}
+                      <br>
+                      {row.hostname}
+                    {/if}
                   </td>
                   <td>
-                    {observation.source} /{observation.observedAt}
+                    {row.sources.join('・')}
+                    （{row.count}
+                    回）
                     <br>
-                    {JSON.stringify(observation.value.ports ?? [])}
+                    {row.first === row.last ? row.first : `${row.first} ～ ${row.last}`}
+                    {#if row.openPorts.length}
+                      <br>
+                      開いているポート：{row.openPorts.join(', ')}
+                    {/if}
                   </td>
                   <td>
                     <select
-                      aria-label={`${String(observation.value.ip)}の照合先`}
-                      value={mappings[observation.id] ?? ''}
+                      aria-label={`${row.ip}の照合先`}
+                      value={mappings[row.ids[0]!] ?? ''}
                       onchange={(e) => {
-                        mappings[observation.id] = e.currentTarget.value
+                        for (const id of row.ids) {
+                          mappings[id] = e.currentTarget.value
+                        }
                       }}
                     >
                       <option value="">照合先を選択（候補なしなら新規）</option>
-                      <option value="new">新規機器として採用</option>
-                      {#each candidates(doc, observation, profile.siteId) as candidate}
+                      <option value="new">新規機器として追加</option>
+                      {#each candidates(doc, row.sample, profile.siteId) as candidate}
                         <option value={candidate.id}>{candidate.name}（一致は候補）</option>
                       {/each}
                     </select>

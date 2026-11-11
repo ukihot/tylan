@@ -204,7 +204,7 @@ test('取り込み処理中は画面移動とページ終了を止める', async
   const screen = await render(App, { folder: fake.folder })
   await screen.getByRole('button', { name: 'network.json を開く' }).click()
   await screen.getByRole('link', { name: '監査', exact: true }).click()
-  await screen.getByRole('checkbox', { name: '192.168.1.42を採用候補に選択' }).click()
+  await screen.getByRole('checkbox', { name: '192.168.1.42を台帳に追加' }).click()
   await screen.getByRole('textbox', { name: '確認者' }).fill('調査者')
   await screen.getByRole('button', { name: '選択した結果を取り込む' }).click()
   await expect.poll(() => sealing).toBe(true)

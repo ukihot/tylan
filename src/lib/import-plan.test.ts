@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { migrateV2, planImport } from './import-plan'
+import { groupDevices, migrateV2, planImport } from './import-plan'
 import { parseDocument } from './io'
 import { toPublic } from './publish'
 import { fixture, id, NOW } from './test-fixture'
@@ -307,4 +307,36 @@ test('the public projection never carries import records or the document identit
   expect(text).not.toContain(plan.importId)
   expect(text).not.toContain(options.documentId)
   expect(text).not.toContain('a'.repeat(64))
+})
+
+test('one PC seen in hundreds of ARP packets and both Nmap phases is one row', () => {
+  const at = (s: number) => `2026-11-10T15:50:${String(s).padStart(2, '0')}+09:00`
+  const obs = (id: string, type: string, source: string, s: number, value: object) => ({
+    id,
+    type,
+    source,
+    observedAt: at(s),
+    segment: 'sit',
+    value,
+  })
+  const pc = { ip: '192.168.8.47', mac: 'b0:7b:25:17:87:d2' }
+  const rows = groupDevices([
+    ...Array.from({ length: 300 }, (_, i) => obs(`a${i}`, 'arp', 'tshark', i % 60, pc)),
+    obs('n1', 'device', 'nmap', 10, { ...pc, ports: [], hostname: null }),
+    obs('n2', 'device', 'nmap', 20, {
+      ...pc,
+      ports: [
+        { port: 445, protocol: 'tcp', state: 'open' },
+        { port: 22, protocol: 'tcp', state: 'filtered' },
+      ],
+    }),
+    obs('x', 'arp', 'tshark', 5, { ip: '192.168.8.5', mac: '00:00:00:00:00:05' }),
+    obs('dns', 'dns', 'tshark', 5, { ip: '192.168.8.5' }),
+  ] as never)
+  expect(rows.map((r) => r.ip)).toEqual(['192.168.8.5', '192.168.8.47'])
+  const row = rows[1]!
+  expect(row.ids).toHaveLength(302)
+  expect(row.sources).toEqual(['tshark', 'nmap'])
+  expect([row.first, row.last]).toEqual([at(0), at(59)])
+  expect(row.openPorts).toEqual(['445/tcp'])
 })

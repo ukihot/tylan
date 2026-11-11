@@ -166,7 +166,7 @@ test('start → result → adopt → Undo through the shipped launcher and job o
     // A finished collection is not a saved import.
     expect((await saved()).schemaVersion).toBe(1)
 
-    await page.getByRole('checkbox', { name: '192.168.1.42を採用候補に選択' }).check()
+    await page.getByRole('checkbox', { name: '192.168.1.42を台帳に追加' }).check()
     await page.getByLabel(/No\.14/).check()
     await page.getByRole('textbox', { name: '確認者' }).fill('調査者')
     await page.getByRole('button', { name: '選択した結果を取り込む' }).click()

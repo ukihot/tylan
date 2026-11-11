@@ -53,6 +53,67 @@ export function candidates(doc: Doc, obs: Observation, siteId: string) {
       ),
   )
 }
+export type DeviceRow = {
+  ip: string
+  mac: string | null
+  hostname: string | null
+  /** every device/arp observation behind this row; selecting the row selects them all */
+  ids: string[]
+  sources: string[]
+  count: number
+  first: string
+  last: string
+  openPorts: string[]
+  sample: Observation
+}
+const ipOrder = (ip: string) => ip.split('.').reduce((n, octet) => n * 256 + Number(octet), 0)
+/** One row per observed device, keyed by ip:mac exactly as planImport merges them into one device.
+ * TShark logs an ARP observation per packet and Nmap one per scan phase, so one PC can have hundreds. */
+export function groupDevices(observations: Observation[]): DeviceRow[] {
+  const rows = new Map<string, DeviceRow>()
+  for (const obs of observations) {
+    if (obs.type !== 'device' && obs.type !== 'arp') {
+      continue
+    }
+    const v = obs.value
+    const key = `${v.ip}:${String(v.mac ?? '')}`
+    let row = rows.get(key)
+    if (!row) {
+      row = {
+        ip: String(v.ip),
+        mac: typeof v.mac === 'string' ? v.mac : null,
+        hostname: null,
+        ids: [],
+        sources: [],
+        count: 0,
+        first: obs.observedAt,
+        last: obs.observedAt,
+        openPorts: [],
+        sample: obs,
+      }
+      rows.set(key, row)
+    }
+    row.ids.push(obs.id)
+    row.count++
+    if (!row.sources.includes(obs.source)) {
+      row.sources.push(obs.source)
+    }
+    if (obs.observedAt < row.first) {
+      row.first = obs.observedAt
+    }
+    if (obs.observedAt > row.last) {
+      row.last = obs.observedAt
+    }
+    row.hostname ??= typeof v.hostname === 'string' && v.hostname ? v.hostname : null
+    for (const port of (v.ports as { port: number; protocol: string; state: string }[]) ?? []) {
+      const name = `${port.port}/${port.protocol}`
+      if (port.state === 'open' && !row.openPorts.includes(name)) {
+        row.openPorts.push(name)
+      }
+    }
+  }
+  return [...rows.values()].sort((a, b) => ipOrder(a.ip) - ipOrder(b.ip))
+}
 const endKey = (end: Endpoint) =>
   'unknown' in end ? `unknown:${end.unknown}` : `${end.deviceId}:${end.portId ?? '-'}`
 const linkKey = (kind: string, a: Endpoint, b: Endpoint) =>

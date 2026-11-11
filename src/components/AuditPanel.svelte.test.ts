@@ -285,7 +285,7 @@ test('adoption shows which of its steps is in progress', async () => {
     ...finishedRun,
     'POST audit/runs/run1/evidence': () => new Promise(() => {}),
   })
-  await screen.getByRole('checkbox', { name: '192.168.1.42を採用候補に選択' }).click()
+  await screen.getByRole('checkbox', { name: '192.168.1.42を台帳に追加' }).click()
   await screen.getByRole('textbox', { name: '確認者' }).fill('調査者')
   await screen.getByRole('button', { name: '選択した結果を取り込む' }).click()
   await expect.poll(() => currentStep('取り込みの段階')).toContain('証跡の転送・封印')
