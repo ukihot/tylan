@@ -16,8 +16,10 @@ export function parseDocument(
   if (!input || typeof input !== 'object' || !('format' in input) || input.format !== 'tylan') {
     throw new Error('tylanの正本JSONを選択してください')
   }
-  if (!('schemaVersion' in input) || ![1, 2].includes(input.schemaVersion as number)) {
-    throw new Error('未対応の形式です。対応するアプリ版を使用してください')
+  if (!('schemaVersion' in input) || input.schemaVersion !== 3) {
+    throw new Error(
+      '未対応の形式です（v3のみ）。旧形式のJSONは読み込めないため、新しく作成してください',
+    )
   }
   const result = validate(input)
   if (result.errors.length) {

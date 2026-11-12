@@ -92,13 +92,10 @@ export function createWorkspace(initial = emptyDoc(nowJst(), createId('prj'))) {
       }
       // Revision metadata is monotonic even when content is undone after export.
       const restored = structuredClone(previous.doc)
-      if (doc.schemaVersion === 2) {
-        restored.schemaVersion = 2
-        restored.documentId = doc.documentId
-        restored.importBatches = structuredClone(doc.importBatches ?? []).map((batch) =>
-          batch.id === previous.importId ? { ...batch, state: 'reverted' as const } : batch,
-        )
-      }
+      restored.documentId = doc.documentId
+      restored.importBatches = structuredClone(doc.importBatches).map((batch) =>
+        batch.id === previous.importId ? { ...batch, state: 'reverted' as const } : batch,
+      )
       const next = {
         ...restored,
         project: {

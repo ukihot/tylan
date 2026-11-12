@@ -7,30 +7,42 @@
     type RunState,
   } from '../lib/audit-client'
   import type { CollectionResult } from '../lib/collection-schema'
+  import { fidget } from '../lib/fidget.svelte'
   import type { FileSession } from '../lib/file-session.svelte'
   import type { Folder } from '../lib/folder'
   import {
-    candidates,
+    analyze,
+    baselineFor,
     type Endpoint,
-    groupDevices,
-    migrateV2,
+    fieldLabels,
+    type HostClass,
+    type HostRow,
     planImport,
   } from '../lib/import-plan'
   import { parseDocument, prepareExport } from '../lib/io'
-  import { createId, nowJst } from '../lib/platform'
-  import { compareRuns } from '../lib/run-diff'
-  import type { Doc } from '../lib/schema'
+  import { createId, nowJst, todayName } from '../lib/platform'
+  import { valueLabels } from '../lib/presentation'
+  import { type EntityMap, entitySchemas, newEntity } from '../lib/schema'
   import type { Workspace } from '../lib/store.svelte'
-  import Topology from './Topology.svelte'
 
   let {
     workspace,
     files,
     folder,
-    visible = true,
-  }: { workspace: Workspace; files: FileSession; folder: Folder; visible?: boolean } = $props()
+    view,
+    siteId,
+  }: {
+    workspace: Workspace
+    files: FileSession
+    folder: Folder
+    /** null: off screen, only the floating job chip shows */
+    view: 'run' | 'diff' | null
+    siteId: string
+  } = $props()
   const client = untrack(() => createAuditClient(folder))
   const doc = $derived(workspace.doc)
+  const round = $derived(doc.auditRounds.findLast((r) => r.siteIds.includes(siteId)))
+  const baseline = $derived(baselineFor(doc, siteId))
   let profile = $state<AuditProfile>({
     mode: 'standard',
     duration: 300,
@@ -42,37 +54,31 @@
     nicGuid: '',
     siteId: '',
     roundId: '',
-    ports: [22, 53, 80, 135, 139, 443, 445, 515, 631, 3389, 5985, 5986, 8080, 8443, 9100],
+    ports: [22, 53, 80, 135, 139, 443, 445, 515, 554, 631, 3389, 5985, 5986, 8080, 8443, 9100],
     features: { arp: true, dns: true, dhcp: true, discovery: true, ports: true, ipv6Local: true },
   })
   const featureLabels = [
-    ['discovery', 'IPv4機器探索'],
-    ['ports', 'IPv4指定TCPポート監査'],
-    ['arp', 'IPv4 ARP監査'],
-    ['dns', 'IPv4 DNS監査'],
-    ['dhcp', 'IPv4 DHCP監査'],
-    ['ipv6Local', 'IPv6ローカル設定確認（送信なし）'],
+    ['discovery', '機器探索'],
+    ['ports', 'TCPポート確認'],
+    ['arp', 'ARP観測'],
+    ['dns', 'DNS観測'],
+    ['dhcp', 'DHCP観測'],
+    ['ipv6Local', 'IPv6設定の読取（送信なし）'],
   ] as const
   let inventory = $state<Inventory | null>(null)
-  let profiles = $state<{ id: string; name: string; profile: AuditProfile }[]>([])
-  let profileName = $state('現地標準')
+  let siteName = $state('')
   let ranges = $state('')
   let exclusions = $state('')
   let portText = $state(untrack(() => profile.ports.join(',')))
-  let dhcpText = $state('')
-  let dnsText = $state('')
-  let gatewayText = $state('')
   let ratioText = $state('')
   let keepDnsNames = $state(false)
   let retentionDays = $state(90)
   let adServer = $state('')
   let adBase = $state('')
   let dhcpServers = $state('')
-  let windowsTargets = $state('')
   let switchFile = $state<File | null>(null)
   type LinkDraft = { aDevice: string; aPort: string; bDevice: string; bPort: string }
   let linkDrafts = $state<Record<string, LinkDraft>>({})
-  let segmentId = $state('')
   let checkedBy = $state('')
   /** The one foreground job, named so the screen can say what it is waiting for. */
   let busyLabel = $state('')
@@ -89,7 +95,6 @@
   ]
   let adoptStep = $state(-1)
   let adoptFailed = $state(false)
-  let message = $state('')
   let error = $state('')
   let missingTools = $state<string[]>([])
   let optionalTools = $state<string[]>([])
@@ -97,17 +102,14 @@
   let runState = $state<RunState | null>(null)
   let result = $state<CollectionResult | null>(null)
   let selected = $state<Record<string, boolean>>({})
-  let mappings = $state<Record<string, string>>({})
-  let preview = $state<Doc | null>(null)
+  let kinds = $state<Record<string, EntityMap['devices']['kind']>>({})
   let past = $state<RunState[]>([])
-  let previous = $state<CollectionResult | null>(null)
   let executionPlan = $state<{
     hash: string
     targets: string[]
     source: string
     routes: { prefix: string; ifIndex: number; nextHop: string; metric: number }[]
   } | null>(null)
-  let plannedDocumentId = createId('doc')
   let polling = false
   const stateLabels: Record<string, string> = {
     queued: '待機中',
@@ -129,42 +131,45 @@
     truncated: '容量上限で打ち切り',
     partial: '一部のみ',
   }
+  const classLabels: Record<HostClass, string> = {
+    rogue: '不審',
+    unregistered: '未登録',
+    candidate: '管理機器の候補',
+    known: '台帳と一致',
+    client: '利用端末',
+  }
+  const classOrder: HostClass[] = ['rogue', 'unregistered', 'candidate', 'known']
+  const baselineLabels = {
+    match: '基準どおり',
+    unset: '基準未設定',
+    differs: '基準と違う',
+    unobserved: '観測なし',
+  }
+  const kindOptions = entitySchemas.devices.shape.kind.options
   const active = $derived(
     runId !== '' &&
       !['completed', 'partial', 'failed', 'cancelled', 'interrupted', 'rejected'].includes(
         runState?.state ?? '',
       ),
   )
-  const deviceRows = $derived(groupDevices(result?.observations ?? []))
+  const analysis = $derived(result && siteId ? analyze(doc, result, siteId) : null)
+  const managed = $derived(
+    (analysis?.hosts ?? [])
+      .filter((h) => h.class !== 'client')
+      .toSorted((a, b) => classOrder.indexOf(a.class) - classOrder.indexOf(b.class)),
+  )
   const linkObservations = $derived(
     result?.observations.filter((o) => o.type === 'physicalCandidate') ?? [],
   )
-  const managementObservations = $derived(
-    result?.observations.filter((o) => o.type === 'adComputer' || o.type === 'dhcpScope') ?? [],
+  const scopeObservations = $derived(
+    result?.observations.filter((o) => o.type === 'dhcpScope') ?? [],
   )
   const incomplete = $derived(result?.collectors.some((c) => c.state !== 'completed') ?? false)
-  const diff = $derived(previous && result ? compareRuns(previous, result) : null)
-  const siteDevices = $derived(doc.devices.filter((d) => d.siteId === profile.siteId))
-  const ipv6Status = $derived.by(() => {
-    const status = inventory?.ipv6
-    if (!status) {
-      return ''
-    }
-    if (status.state === 'completed') {
-      const count = inventory!.addresses.filter((a) => a.family === 'IPv6').length
-      return `IPv6設定を読取確認しました（アドレス${count}件・送信なし）`
-    }
-    if (status.state === 'skipped') {
-      return 'IPv6ローカル設定確認はOFFです。IPv6設定未確認（IPv6経路なしとは判断しません）'
-    }
-    return `IPv6設定未確認：${status.reason ?? '取得失敗'}（IPv6経路なしとは判断しません）`
-  })
-  // Findings need an audit round; without one they would abort the whole import.
-  const selectedKeys = $derived(
-    Object.keys(selected).filter(
-      (key) => selected[key] && (profile.roundId || !result?.findings.some((f) => f.id === key)),
-    ),
+  const otherSite = $derived(
+    !!result && typeof result.profile.siteId === 'string' && result.profile.siteId !== siteId,
   )
+  const selectedKeys = $derived(Object.keys(selected).filter((key) => selected[key]))
+  const siteDevices = $derived(doc.devices.filter((d) => d.siteId === siteId))
   const addressChoices = $derived(
     inventory?.addresses.filter(
       (a) =>
@@ -172,13 +177,22 @@
         inventory?.adapters.some((n) => n.ifIndex === a.ifIndex && n.status === 'Up'),
     ) ?? [],
   )
+  const nicName = $derived(
+    inventory?.adapters.find((n) => n.ifIndex === profile.ifIndex)?.name ?? '',
+  )
   const split = (text: string) =>
     text
       .split(/[\s,;]+/)
       .map((s) => s.trim())
       .filter(Boolean)
+  const baselineText = (values: string[] | null) => values?.join(', ') ?? '未設定'
+  const baselineLine = $derived(
+    `GW ${baselineText(baseline.expectedGateway)} / DNS ${baselineText(baseline.expectedDns)} / DHCP ${baselineText(baseline.approvedDhcp)}`,
+  )
+  const runPlan = $derived(
+    `${{ passive: '通信の観測だけ', detail: '詳細調査' }[profile.mode as string] ?? '標準'}・観測${Math.round(profile.duration / 60)}分（全体は最長15分）`,
+  )
   const errorText = (value: unknown) => (value instanceof Error ? value.message : String(value))
-  type Step = { name: string; status: 'done' | 'current' | 'pending' | 'skipped' | 'failed' }
   const RUN_STEPS: Record<string, string> = {
     validating: '設定確認',
     observing: '通信観測',
@@ -188,97 +202,51 @@
   }
   const clock = (seconds: number) =>
     `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
-  /** Stages actually reached are done; stages never reached by a finished run were skipped. */
-  const runSteps = $derived.by((): Step[] => {
-    const state = runState?.state
-    const accepted = runState !== null && state !== 'rejected'
-    const visited = runState?.stages ?? []
-    const steps: Step[] = [
-      { name: '受付', status: state === 'rejected' ? 'failed' : accepted ? 'done' : 'current' },
-    ]
-    for (const [key, name] of Object.entries(RUN_STEPS)) {
-      const here = runState?.stage === key
-      steps.push({
-        name,
-        status:
-          active && accepted && here
-            ? 'current'
-            : !active && here && state !== 'completed' && state !== 'partial'
-              ? 'failed'
-              : visited.includes(key)
-                ? 'done'
-                : active || !accepted
-                  ? 'pending'
-                  : 'skipped',
-      })
-    }
-    return steps
-  })
   const stageName = $derived(runState ? (RUN_STEPS[runState.stage] ?? runState.stage) : '受付待ち')
-  /** Counted work, a time window, or unknown length (an indeterminate bar). */
-  const runMeter = $derived.by(() => {
+  /** Counted work or a time window; nothing when the length is unknown. */
+  const runDetail = $derived.by(() => {
     const progress = runState?.progress
-    const label = `${stageName}の進捗`
     if (progress && 'total' in progress) {
-      const unit = runState!.stage === 'scanning' ? 'バッチ' : '件'
-      return {
-        label,
-        value: progress.done,
-        max: progress.total,
-        text: `${progress.done} / ${progress.total} ${unit}`,
-      }
+      return `${progress.done}/${progress.total} ${runState!.stage === 'scanning' ? 'バッチ' : '件'}`
     }
     if (progress && 'endsAt' in progress) {
       const max = Math.max(1, Math.round(progress.endsAt - progress.startedAt))
       const value = Math.min(max, Math.max(0, now - progress.startedAt))
-      return {
-        label,
-        value,
-        max,
-        text: `経過 ${clock(value)} / ${clock(max)}（残り約 ${clock(max - value)}）`,
-      }
+      return `${clock(value)}/${clock(max)}`
     }
-    return {
-      label,
-      value: null,
-      max: null,
-      text: runState
-        ? `${stageName}を処理中`
-        : '収集器の受付を確認中（まだ実行中とは判定していません）',
+    return runState ? '' : '受付確認中'
+  })
+  // Progress lives only in the floating text at the right edge, on every step.
+  $effect(() => {
+    if (!runId) {
+      return
+    }
+    if (active) {
+      fidget.progress('run', `監査 ${stageName}`, runDetail)
+    } else {
+      const state = runState ? (stateLabels[runState.state] ?? runState.state) : '受付拒否'
+      fidget.done('run', `監査 ${state}`)
     }
   })
-  const adoptView = $derived(
-    ADOPT_STEPS.map(
-      (name, index): Step => ({
-        name,
-        status:
-          index < adoptStep
-            ? 'done'
-            : index > adoptStep
-              ? 'pending'
-              : adoptFailed
-                ? 'failed'
-                : 'current',
-      }),
-    ),
-  )
-  /** What the floating chip says while the panel is off screen. */
-  const jobLabel = $derived(
-    files.auditBusy && adoptStep >= 0 && adoptStep < ADOPT_STEPS.length
-      ? `取り込み：${ADOPT_STEPS[adoptStep]}`
-      : active
-        ? `${runState ? (stateLabels[runState.state] ?? runState.state) : '受付待ち'}：${stageName}`
-        : busyLabel
-          ? `${busyLabel}中`
-          : '',
-  )
+  $effect(() => {
+    if (adoptStep < 0) {
+      return
+    }
+    if (adoptFailed) {
+      fidget.done('adopt', `取り込み失敗 ${ADOPT_STEPS[adoptStep] ?? ''}`)
+    } else if (adoptStep >= ADOPT_STEPS.length) {
+      fidget.done('adopt', '取り込み完了')
+    } else {
+      fidget.progress(
+        'adopt',
+        `取り込み ${ADOPT_STEPS[adoptStep]}`,
+        `${adoptStep + 1}/${ADOPT_STEPS.length}`,
+      )
+    }
+  })
 
   onMount(() => {
-    profile.siteId = doc.sites[0]?.id ?? ''
-    profile.roundId = doc.auditRounds.at(-1)?.id ?? ''
-    segmentId = ''
     checkedBy = doc.project.updatedBy ?? ''
-    plannedDocumentId = doc.documentId ?? plannedDocumentId
     if (client) {
       void initialize()
     }
@@ -291,11 +259,12 @@
     return () => clearInterval(timer)
   })
   async function initialize() {
+    let available = false
     try {
       const audit = (await folder.info()).audit
+      available = !!audit?.available
       missingTools = audit?.missing ?? []
       optionalTools = audit?.optional ?? []
-      profiles = await client!.call('audit/profiles')
       past = await client!.call('audit/past')
       const runs = await client!.call<{ runId: string }[]>('audit/runs')
       if (runs.length) {
@@ -305,42 +274,30 @@
     } catch (e) {
       error = errorText(e)
     }
-  }
-  function applyProfile(value: AuditProfile) {
-    profile = structuredClone(value)
-    ranges = value.cidrs.join(', ')
-    exclusions = value.exclude.join(', ')
-    portText = value.ports.join(',')
-    dhcpText = value.approvedDhcp?.join(', ') ?? ''
-    dnsText = value.expectedDns?.join(', ') ?? ''
-    gatewayText = value.expectedGateway?.join(', ') ?? ''
-    ratioText = value.dnsFailureRatio == null ? '' : String(value.dnsFailureRatio)
-    keepDnsNames = value.detailEvidence?.dnsNames ?? false
-    retentionDays = value.detailEvidence?.retentionDays ?? 90
-    adServer = value.management?.ad?.server ?? ''
-    adBase = value.management?.ad?.searchBase ?? ''
-    dhcpServers = value.management?.dhcpServers?.join(', ') ?? ''
-    windowsTargets = value.management?.windows?.join(', ') ?? ''
+    // Find the NIC up front so the start button needs nothing else.
+    if (available && !missingTools.length && !active) {
+      await action('ホスト設定の取得', diagnose)
+    }
   }
   function currentProfile(): AuditProfile {
-    const { management: _management, detailEvidence: _detail, ...base } = $state.snapshot(profile)
+    const { management: _m, detailEvidence: _d, ...base } = $state.snapshot(profile)
     const management = {
       ...(adServer.trim() ? { ad: { server: adServer.trim(), searchBase: adBase.trim() } } : {}),
       ...(split(dhcpServers).length ? { dhcpServers: split(dhcpServers) } : {}),
-      ...(split(windowsTargets).length ? { windows: split(windowsTargets) } : {}),
     }
     return {
       ...base,
+      siteId,
+      roundId: round?.id ?? '',
       cidrs: split(ranges),
       exclude: split(exclusions),
       ports: split(portText).map(Number),
-      approvedDhcp: dhcpText.trim() ? split(dhcpText) : null,
-      expectedDns: dnsText.trim() ? split(dnsText) : null,
-      expectedGateway: gatewayText.trim() ? split(gatewayText) : null,
+      // The yardstick is the JSON's baseline, edited in step 2: never typed in twice.
+      ...baselineFor(doc, siteId),
       dnsFailureRatio: ratioText.trim() ? Number(ratioText) : null,
       ...(keepDnsNames ? { detailEvidence: { dnsNames: true, retentionDays } } : {}),
       ...(profile.mode === 'detail' && Object.keys(management).length ? { management } : {}),
-      ...(doc.documentId ? { documentId: doc.documentId } : {}),
+      documentId: doc.documentId,
     }
   }
   function selectNic(key: string) {
@@ -355,8 +312,7 @@
       prefixLength: choice.prefixLength,
       nicGuid: nic.guid,
     })
-    const bytes = choice.address.split('.').map(Number)
-    const value = bytes.reduce((n, b) => (n << 8n) + BigInt(b), 0n)
+    const value = choice.address.split('.').reduce((n, b) => (n << 8n) + BigInt(b), 0n)
     const hostBits = BigInt(32 - choice.prefixLength)
     const network = (value >> hostBits) << hostBits
     ranges =
@@ -370,11 +326,13 @@
     }
     busyLabel = label
     error = ''
-    message = ''
+    fidget.progress('busy', label)
     try {
       await work()
+      fidget.done('busy', label)
     } catch (e) {
       error = errorText(e)
+      fidget.done('busy', `${label} 失敗`)
     } finally {
       busyLabel = ''
     }
@@ -385,24 +343,57 @@
       throw new Error('ホスト設定を取得できません')
     }
     inventory = reply.inventory
-    message = 'ホスト設定を取得しました。送信元NIC・対象・除外を確認してください。'
+    // The NIC that carries the default route is the LAN being audited.
+    const best = inventory.routes
+      .filter((r) => r.prefix === '0.0.0.0/0')
+      .toSorted((a, b) => a.metric - b.metric)
+      .find((r) => addressChoices.some((a) => a.ifIndex === r.ifIndex))
+    const pick = addressChoices.find((a) => a.ifIndex === best?.ifIndex) ?? addressChoices[0]
+    if (pick && !profile.ifIndex) {
+      selectNic(`${pick.ifIndex}:${pick.address}`)
+    }
+  }
+  /** A first audit needs a site and a round: made here so the start button is the only step. */
+  function ensureContext() {
+    let site = siteId || doc.sites[0]?.id
+    if (!site) {
+      if (!siteName.trim()) {
+        throw new Error('拠点名を入力してください')
+      }
+      site = createId('sit')
+      if (!workspace.upsert('sites', { ...newEntity('sites', site), name: siteName.trim() })) {
+        throw new Error('拠点を登録できません')
+      }
+    }
+    if (!doc.auditRounds.some((r) => r.siteIds.includes(site))) {
+      const ok = workspace.startRound({
+        ...newEntity('auditRounds', createId('rnd')),
+        name: todayName(),
+        siteIds: [site],
+        startDate: nowJst().slice(0, 10),
+      })
+      if (!ok) {
+        throw new Error('監査回次を作成できません')
+      }
+    }
   }
   function resetRun() {
     result = null
-    preview = null
     selected = {}
-    mappings = {}
+    kinds = {}
     linkDrafts = {}
     runState = null
   }
   async function start() {
+    ensureContext()
     resetRun()
     const started = await client!.start(currentProfile(), createId('run'))
     runId = started.runId
-    message = '依頼済み・受付未確認。まだ実行中とは判定していません。'
+    fidget.say('依頼済み・受付未確認。まだ実行中とは判定していません。')
     await poll()
   }
   async function importSwitch() {
+    ensureContext()
     const text = await switchFile!.text()
     if (new TextEncoder().encode(text).byteLength > 1024 * 1024) {
       throw new Error('スイッチ情報は1MiB以下にしてください')
@@ -415,12 +406,22 @@
     }
     resetRun()
     const started = await client!.start(
-      { mode: 'offline', siteId: profile.siteId, switchExport } as AuditProfile,
+      { mode: 'offline', siteId, switchExport } as AuditProfile,
       createId('run'),
     )
     runId = started.runId
-    message = '取り込み依頼済み・受付未確認。'
+    fidget.say('取り込み依頼済み・受付未確認。')
     await poll()
+  }
+  /** Everything worth keeping is ticked up front; only clients are never offered. */
+  function preselect(found: CollectionResult) {
+    const a = analyze(doc, found, siteId)
+    selected = Object.fromEntries([
+      ...a.baseline.filter((b) => b.state === 'unset').map((b) => [b.key, true]),
+      ...a.hosts.filter((h) => h.class !== 'client' && h.cidr).map((h) => [h.key, true]),
+      ...found.findings.map((f) => [f.id, true]),
+      ...found.observations.filter((o) => o.type === 'dhcpScope').map((o) => [o.id, true]),
+    ])
   }
   const draft = (id: string): LinkDraft =>
     linkDrafts[id] ?? { aDevice: '', aPort: '', bDevice: '', bPort: '' }
@@ -467,8 +468,13 @@
         !result
       ) {
         try {
-          result = await client.result(runId)
-          message = '収集結果を取得しました。正本には未採用です。'
+          const found = await client.result(runId)
+          preselect(found)
+          result = found
+          fidget.say('収集結果を取得しました。正本には未採用です。')
+          if (view === 'run') {
+            window.location.hash = '#/diff'
+          }
         } catch (e) {
           if (runState.state === 'completed') {
             throw e
@@ -488,18 +494,16 @@
     await poll()
   }
   async function plan(hash: string, location: string) {
-    if (!result || !selectedKeys.length) {
-      throw new Error('採用する候補を選択してください')
+    if (!result || !round) {
+      throw new Error('監査回次がありません。①から監査を実行してください')
     }
     return planImport(doc, $state.snapshot(result), {
-      documentId: doc.documentId ?? plannedDocumentId,
-      siteId: profile.siteId,
-      segmentId,
-      roundId: profile.roundId || null,
+      siteId,
+      roundId: round.id,
       selected: selectedKeys,
-      mappings: $state.snapshot(mappings),
+      kinds: $state.snapshot(kinds),
       links: linkMappings(),
-      checkedBy: checkedBy || 'プレビュー',
+      checkedBy,
       now: nowJst(),
       packageHash: hash,
       storageLocation: location,
@@ -535,12 +539,6 @@
     }
   }
   async function adoptSteps() {
-    if (doc.schemaVersion === 1) {
-      const migrated = migrateV2(doc, plannedDocumentId)
-      if (!workspace.commit((draft) => Object.assign(draft, migrated))) {
-        throw new Error('v2へ移行できません')
-      }
-    }
     const target = await files.beginImport()
     let importId = ''
     let commitAttempted = false
@@ -554,7 +552,7 @@
       const prepared = await plan(sealed.package.hash, sealed.package.path)
       importId = prepared.importId
       if (JSON.stringify(prepared.doc) === JSON.stringify(doc)) {
-        message = '同じ結果は採用済みです。重複を作成しません。'
+        fidget.say('同じ結果は取り込み済みです。重複を作成しません。')
         return
       }
       const output = prepareExport(prepared.doc, nowJst(), checkedBy)
@@ -563,7 +561,7 @@
         importId,
         path: target.path,
         expect: target.expect,
-        siteId: profile.siteId,
+        siteId,
         text: output.text,
       })
       await waitImport(importId)
@@ -577,8 +575,8 @@
         'POST',
       )
       files.completeImport(parseDocument(saved.text), importId, saved.lastModified)
-      message = `選択した結果を保存しました。監査判定は下書きです。${prepared.conflicts.join('。')}`
-      preview = null
+      fidget.say(`取り込みました。判定は下書きのままです。${prepared.conflicts.join('。')}`)
+      window.location.hash = '#/judge'
     } catch (e) {
       if (importId && commitAttempted) {
         adoptStep = 6
@@ -588,7 +586,9 @@
           )
           if (status.state === 'applied') {
             files.completeImport(parseDocument(status.text), importId, status.lastModified)
-            message = '正本を照合し、採用済みであることを確認しました。再取り込みは行っていません。'
+            fidget.say(
+              '正本を照合し、取り込み済みであることを確認しました。再取り込みは行っていません。',
+            )
             return
           }
         } catch {
@@ -602,53 +602,70 @@
   }
 </script>
 
-{#snippet stepper(label: string, steps: Step[])}
-  <ol class="steps" aria-label={label}>
-    {#each steps as step}
-      <li class={step.status} aria-current={step.status === 'current' ? 'step' : undefined}>
-        {step.name}
-      </li>
-    {/each}
-  </ol>
-{/snippet}
-{#snippet meter(label: string, value: number | null, max: number | null, text: string)}
-  <div class="meter">
-    {#if value === null}
-      <progress aria-label={label}></progress>
-    {:else}
-      <progress aria-label={label} {value} {max}></progress>
-    {/if}
-    <span>{text}</span>
-  </div>
-{/snippet}
-{#if !visible}
-  {#if jobLabel}
-    <a class="job-chip" href="#/audit">
-      <strong>現地監査</strong>
-      <span>{jobLabel}</span>
-      {#if active}
-        {@render meter(runMeter.label, runMeter.value, runMeter.max, runMeter.text)}
+{#snippet hostRow(row: HostRow)}
+  <tr class={`host-${row.class}`}>
+    <td>
+      <input
+        type="checkbox"
+        aria-label={`${row.ip}を${row.class === 'known' ? '確認済みにする' : '台帳に追加'}`}
+        disabled={!row.cidr}
+        bind:checked={selected[row.key]}
+      >
+    </td>
+    <td><span class={`tag tag-${row.class}`}>{classLabels[row.class]}</span></td>
+    <td>
+      <strong>{row.ip}</strong>
+      <small class="cell-secondary">
+        {row.mac ?? 'MAC未取得'}
+        {row.hostname ? ` / ${row.hostname}` : ''}
+      </small>
+    </td>
+    <td>
+      {row.class === 'known'
+        ? (doc.devices.find((d) => d.id === row.deviceId)?.name ?? '')
+        : row.why}
+      <small class="cell-secondary">
+        推定：{row.label}
+        {row.vendor ? `（${row.vendor}）` : ''}
+        {row.openPorts.length ? ` / ${row.openPorts.join(', ')}` : ''}
+      </small>
+    </td>
+    <td>
+      {#if row.class === 'known'}
+        確認日を記録
       {:else}
-        {@render meter(jobLabel, null, null, '')}
+        <select
+          aria-label={`${row.ip}の種別`}
+          value={kinds[row.key] ?? row.kind}
+          onchange={(e) => {
+            kinds[row.key] = e.currentTarget.value as EntityMap['devices']['kind']
+          }}
+        >
+          {#each kindOptions as kind}
+            <option value={kind}>{valueLabels[kind]}</option>
+          {/each}
+        </select>
       {/if}
-    </a>
+    </td>
+  </tr>
+{/snippet}
+
+{#if view !== null}
+  {#if error}
+    <div role="alert" class="error">{error}</div>
   {/if}
-{:else}
-  <section class="panel audit-panel" aria-label="現地LAN自動監査">
-    <div class="section-head">
-      <div>
-        <h2>現地LANを調べる</h2>
-      </div>
-    </div>
-    <p>通信監査はIPv4のみ。観測した範囲・時間を記録し、未観測を問題なしにはしません。</p>
-    <p class="muted">IPv6キャプチャ・能動探索は初期版では未対応です。</p>
+{/if}
+
+{#if view === 'run'}
+  <section class="panel" aria-label="現地LAN自動監査">
+    <h2>現地LANを調べる</h2>
     {#if !client}
-      <p>監査用の起動プログラムが接続されていません。通常の台帳編集は利用できます。</p>
+      <p>監査用の起動プログラムが接続されていません。基準の編集・判定・公開は利用できます。</p>
     {:else}
       {#if missingTools.length}
         <div role="alert" class="error">
           監査に必要なソフトがこのPCに見つかりません：{missingTools.join('、')}。導入してから
-          tylan.cmd を起動し直してください。不足したままの収集は「失敗」「未実施」になります。
+          tylan.cmd を起動し直してください。
         </div>
       {/if}
       {#if optionalTools.length}
@@ -657,591 +674,236 @@
           。通信観測（ARP/DNS/DHCP）は未実施として記録されます。
         </p>
       {/if}
-      {#if error}
-        <div role="alert" class="error">{error}</div>
-      {/if}
-      {#if message}
-        <p role="status">{message}</p>
-      {/if}
-      {#if busyLabel}
-        <div class="busy" aria-live="polite">
-          {@render meter(busyLabel, null, null, `${busyLabel}中…`)}
-        </div>
-      {/if}
-      <fieldset
-        disabled={busy || active || files.auditBusy}
-        oninput={(e) => {
-          if ((e.target as HTMLInputElement).name !== 'routeApproval') {
-            delete profile.approvedPlanHash
-            executionPlan = null
-          }
-        }}
-      >
-        <legend>実行条件</legend>
-        <div class="audit-options">
-          <label>
-            拠点<select bind:value={profile.siteId}>
-              {#each doc.sites as site}
-                <option value={site.id}>{site.name}</option>
-              {/each}
-            </select>
-          </label>
-          <label>
-            監査回次<select bind:value={profile.roundId}>
-              <option value="">機器収集のみ</option>
-              {#each doc.auditRounds as round}
-                <option value={round.id}>{round.name}</option>
-              {/each}
-            </select>
-          </label>
-          <label>
-            監査モード<select bind:value={profile.mode}>
-              <option value="standard">標準：オンリンクIPv4</option>
-              <option value="passive">通信だけ観測</option>
-              <option value="detail">詳細：経路承認が必要</option>
-            </select>
-          </label>
-          <label>
-            観測秒数<input type="number" min="5" max="1800" bind:value={profile.duration}>
-          </label>
-        </div>
-        <button type="button" onclick={() => action('ホスト設定の取得', diagnose)}>
-          ホスト設定を取得
-        </button>
-        {#if ipv6Status}
-          <p>{ipv6Status}</p>
-        {/if}
-        <label>
-          送信元NIC<select
-            value={`${profile.ifIndex}:${profile.source}`}
-            onchange={(e) => selectNic(e.currentTarget.value)}
-          >
-            <option value="0:">NICを選択</option>
-            {#if profile.ifIndex && !inventory}
-              <option value={`${profile.ifIndex}:${profile.source}`}>
-                保存済みNIC{profile.source}
-              </option>
-            {/if}
-            {#each addressChoices as address}
-              <option value={`${address.ifIndex}:${address.address}`}>
-                {inventory?.adapters.find((n) => n.ifIndex === address.ifIndex)
-                  ?.name} /{address.address}
-                /{address.prefixLength}
-              </option>
-            {/each}
-          </select>
-        </label>
-        <div class="audit-options">
-          <label>対象IPv4 CIDR<input bind:value={ranges} placeholder="192.168.10.0/24"></label>
-          <label>
-            除外IPv4・CIDR<input
-              bind:value={exclusions}
-              placeholder="192.168.10.10, 192.168.10.128/25"
-            >
-          </label>
-          <label>TCPポート<input bind:value={portText}></label>
-          <label>承認DHCP（空欄＝基準未設定）<input bind:value={dhcpText}></label>
-          <label>想定DNS（空欄＝基準未設定）<input bind:value={dnsText}></label>
-          <label>想定GW（空欄＝基準未設定）<input bind:value={gatewayText}></label>
-          <label>
-            DNS失敗率の閾値（0〜1、空欄＝統計のみ）<input
-              bind:value={ratioText}
-              inputmode="decimal"
-            >
-          </label>
-        </div>
-        <label class="inline">
-          <input type="checkbox" bind:checked={keepDnsNames}>
-          DNS問い合わせ名を証跡に残す（詳細証跡）
-        </label>
-        {#if keepDnsNames}
-          <label>
-            詳細証跡の保持日数<input type="number" min="1" max="3650" bind:value={retentionDays}>
-          </label>
-          <p class="warning">
-            問い合わせ名は閲覧先を含み得ます。証跡フォルダの権限と保持期限を確認してください。期限後の削除は管理操作で行い、自動削除しません。
-          </p>
-        {/if}
-        <div class="audit-features">
-          {#each featureLabels as [feature, label]}
-            <label>
-              <input type="checkbox" bind:checked={profile.features[feature]}>
-              {label}
-            </label>
-          {/each}
-        </div>
-        <p>標準は選択NICのオンリンクIPv4に限定します。経路不一致・変更時は能動監査を止めます。</p>
-        {#if profile.mode === 'detail'}
-          <p class="warning">
-            詳細調査は実行計画の経路承認が必要です。変更すると承認は無効になります。
-          </p>
-          <div class="audit-options">
-            <label>AD/DCサーバー（IPv4）<input bind:value={adServer}></label>
-            <label>AD検索ベース（OU）<input bind:value={adBase}></label>
-            <label>DHCPサーバー（IPv4・最大10）<input bind:value={dhcpServers}></label>
-            <label>Windows端末（IPv4・最大50）<input bind:value={windowsTargets}></label>
-          </div>
-          <p class="muted">
-            管理情報は読取のみ。WinRM・FWを有効化せず、資格情報を保存しません。宛先は経路承認の対象に含めます。
-          </p>
-          <button
-            type="button"
-            onclick={() =>
-              action('経路と対象の確認', async () => {
-                const request = await client.call<{ requestId: string }>('audit/plan', 'POST', {
-                  profile: currentProfile(),
-                })
-                const reply = await client.response(request.requestId)
-                executionPlan = reply.executionPlan ?? null
-              })}
-          >
-            経路と対象を確認
-          </button>
-          {#if executionPlan}
-            <div class="confirm-box">
-              <p>
-                送信元{executionPlan.source} / 対象{executionPlan.targets.length} / 計画{executionPlan.hash}
-              </p>
-              <ul>
-                {#each executionPlan.routes as route}
-                  <li>
-                    {route.prefix} →{route.nextHop} / NIC{route.ifIndex} / metric{route.metric}
-                  </li>
-                {/each}
-              </ul>
-              <label>
-                <input
-                  type="checkbox"
-                  name="routeApproval"
-                  checked={profile.approvedPlanHash === executionPlan.hash}
-                  onchange={(e) => {
-                    profile.approvedPlanHash = e.currentTarget.checked
-                      ? executionPlan?.hash
-                      : undefined
-                  }}
-                >
-                表示した対象・経路・次ホップでこの実行を承認
-              </label>
-            </div>
+      <div class="run-card">
+        <dl class="run-summary">
+          {#if !doc.sites.length}
+            <dt><label for="site-name">拠点名</label></dt>
+            <dd>
+              <input id="site-name" bind:value={siteName} placeholder="例：本社" maxlength="100">
+            </dd>
           {/if}
-        {/if}
-        <div class="audit-options">
-          <label>プロファイル名<input bind:value={profileName}></label>
-          <label>
-            保存済みプロファイル<select
-              onchange={(e) => {
-                const saved = profiles.find((p) => p.id === e.currentTarget.value)
-                if (saved) {
-                  applyProfile(saved.profile)
-                }
-              }}
-            >
-              <option value="">選択</option>
-              {#each profiles as saved}
-                <option value={saved.id}>{saved.name}</option>
-              {/each}
-            </select>
-          </label>
-        </div>
+          <dt>調べる範囲</dt>
+          <dd>
+            {#if profile.ifIndex}
+              {ranges || '未設定'}
+              <small>（{nicName || 'NIC'} {profile.source} から）</small>
+            {:else if busyLabel === 'ホスト設定の取得'}
+              このPCのNICを確認中…
+            {:else}
+              NIC未選択（下の「実行条件を変える」で選んでください）
+            {/if}
+          </dd>
+          <dt>方式・時間</dt>
+          <dd>{runPlan}</dd>
+          <dt>比べる基準</dt>
+          <dd>
+            {baselineLine}
+            {#if !baseline.expectedGateway || !baseline.expectedDns || !baseline.approvedDhcp}
+              <small>（未設定の基準は、結果を見て②でそのまま基準にできます）</small>
+            {/if}
+          </dd>
+        </dl>
         <button
           type="button"
-          onclick={() =>
-            action('プロファイルの保存', async () => {
-              await client.call('audit/profiles', 'POST', {
-                name: profileName,
-                profile: currentProfile(),
-              })
-              profiles = await client.call('audit/profiles')
-              message = 'プロファイルを保存しました'
-            })}
-        >
-          プロファイルを保存
-        </button>
-        <button
-          type="button"
-          class="primary"
-          disabled={!profile.siteId ||
+          class="primary start"
+          disabled={busy ||
+            active ||
+            files.auditBusy ||
             !profile.ifIndex ||
+            (!doc.sites.length && !siteName.trim()) ||
             (profile.mode === 'detail' && !profile.approvedPlanHash)}
           onclick={() => action('監査の開始依頼', start)}
         >
-          現地監査を開始
+          監査を開始
         </button>
-      </fieldset>
-      <fieldset disabled={busy || active || files.auditBusy}>
-        <legend>スイッチ情報のオフライン取り込み</legend>
-        <p class="muted">
-          tylan-switch-export
-          v1形式（LLDP/CDP/MACテーブル）のJSONを読み込みます。ネットワークへ送信せず、資格情報は受け付けません。
-        </p>
-        <label>
-          エクスポートJSON<input
-            type="file"
-            accept=".json,application/json"
-            onchange={(e) => {
-              switchFile = e.currentTarget.files?.[0] ?? null
-            }}
-          >
-        </label>
-        <button
-          type="button"
-          disabled={!switchFile || !profile.siteId}
-          onclick={() => action('スイッチ情報の取り込み依頼', importSwitch)}
-        >
-          スイッチ情報を取り込む
-        </button>
-      </fieldset>
+      </div>
       {#if runId}
         <div class="confirm-box">
-          <p role="status">
+          <p>
             {`実行 ${runId} / ${runState ? (stateLabels[runState.state] ?? runState.state) : '受付未確認'}${active ? ` / ${stageName}` : ''}`}
           </p>
-          {@render stepper('実行の段階', runSteps)}
-          {#if active}
-            {@render meter(runMeter.label, runMeter.value, runMeter.max, runMeter.text)}
-          {/if}
           {#if runState?.startedAt}
-            <p class="muted">
-              {`開始から ${clock(Math.max(0, now - runState.startedAt))}`}
-            </p>
+            <p class="muted">{`開始から ${clock(Math.max(0, now - runState.startedAt))}`}</p>
           {/if}
           {#if runState?.reason}
             <p>{runState.reason}</p>
           {/if}
-          <button type="button" onclick={poll}>実行状態を再確認</button>
+          <button type="button" onclick={poll}>状態を再確認</button>
           <button
             type="button"
             disabled={!active}
             onclick={() =>
               action('停止の依頼', async () => {
                 await client.cancel(runId)
-                message = '停止を依頼しました。停止完了を確認しています。'
+                fidget.say('停止を依頼しました。停止完了を確認しています。')
                 await poll()
               })}
           >
             監査を中止
           </button>
-        </div>
-      {/if}
-      {#if result}
-        <p>観測期間{result.startedAt} ～{result.endedAt}。収集器ごとの成否を確認してください。</p>
-        {#if incomplete}
-          <p class="warning">
-            部分完了：一部の収集器が完了していません。成功とは扱わず、未実施・失敗・打ち切りの範囲を確認してください。
-          </p>
-        {/if}
-        <p class="muted">
-          観測点{String(result.scope.observationPoint ?? '不明')} / フィルター{String(
-            result.scope.captureFilter ?? 'なし',
-          )}
-          {#if result.scope.retainUntil}
-            / 詳細証跡の保持期限{String(result.scope.retainUntil)}
+          {#if result}
+            <a class="button-link" href="#/diff">結果を確認する（②）</a>
           {/if}
-        </p>
-        <ul>
-          {#each result.collectors as collector}
-            <li>
-              {String(collector.name)}
-              ：{collectorLabels[String(collector.state)] ?? String(collector.state)}
-              {String(collector.reason ?? '')}
-              {#if collector.name === 'capture' && collector.state !== 'skipped'}
-                {`（パケット ${collector.captured ?? '取得不能'} / ドロップ ${collector.dropped ?? '取得不能'} / 行 ${collector.rows ?? '-'} / 集計外 ${collector.omitted ?? 0}）`}
-              {/if}
-            </li>
-          {/each}
-        </ul>
-        <div class="audit-options">
-          <label>
-            採用先セグメント<select bind:value={segmentId}>
-              <option value="">
-                自動（IPを含むセグメント。なければ調査範囲{(Array.isArray(result.profile.cidrs)
-                  ? result.profile.cidrs
-                  : []
-                ).join('・')}
-                から作成）
-              </option>
-              {#each doc.segments.filter((s) => s.siteId === profile.siteId) as segment}
-                <option value={segment.id}>{segment.name} /{segment.cidr ?? 'CIDR未確認'}</option>
-              {/each}
-            </select>
-          </label>
-          <label>確認者<input bind:value={checkedBy}></label>
         </div>
-        <h3>見つかった機器（{deviceRows.length}台）</h3>
-        <p class="muted">
-          収集結果はまだ台帳（JSON）に入っていません。チェックした機器だけを台帳へ追加します。既に台帳にある機器なら「照合先」でその機器を選ぶと、新しく作らずにその機器へ結び付けます。
-        </p>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={deviceRows.length > 0 &&
-                        deviceRows.every((row) => row.ids.every((id) => selected[id]))}
-                      onchange={(e) => {
-                        for (const id of deviceRows.flatMap((row) => row.ids)) {
-                          selected[id] = e.currentTarget.checked
-                        }
-                      }}
-                    >
-                    台帳に追加（すべて）
-                  </label>
-                </th>
-                <th>IP / MAC</th>
-                <th>推定（MAC・ポートから）</th>
-                <th>見つけ方</th>
-                <th>台帳の機器との照合</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each deviceRows as row (row.ids[0])}
-                <tr>
-                  <td>
-                    <input
-                      type="checkbox"
-                      aria-label={`${row.ip}を台帳に追加`}
-                      checked={row.ids.every((id) => selected[id])}
-                      onchange={(e) => {
-                        for (const id of row.ids) {
-                          selected[id] = e.currentTarget.checked
-                        }
-                      }}
-                    >
-                  </td>
-                  <td>
-                    {row.ip}
-                    {row.ip === result.profile.source ? '（この調査用PC）' : ''}
-                    <br>
-                    {row.mac ?? 'MAC未取得'}
-                    {#if row.hostname}
-                      <br>
-                      {row.hostname}
-                    {/if}
-                  </td>
-                  <td>
-                    <strong>{row.guess}</strong>
-                    <br>
-                    {row.vendor ?? (row.mac ? 'メーカー不明' : 'MAC未取得')}
-                  </td>
-                  <td>
-                    {row.sources.join('・')}
-                    （{row.count}
-                    回）
-                    <br>
-                    {row.first === row.last ? row.first : `${row.first} ～ ${row.last}`}
-                    {#if row.openPorts.length}
-                      <br>
-                      開いているポート：{row.openPorts.join(', ')}
-                    {/if}
-                  </td>
-                  <td>
-                    <select
-                      aria-label={`${row.ip}の照合先`}
-                      value={mappings[row.ids[0]!] ?? ''}
-                      onchange={(e) => {
-                        for (const id of row.ids) {
-                          mappings[id] = e.currentTarget.value
-                        }
-                      }}
-                    >
-                      <option value="">照合先を選択（候補なしなら新規）</option>
-                      <option value="new">新規機器として追加</option>
-                      {#each candidates(doc, row.sample, profile.siteId) as candidate}
-                        <option value={candidate.id}>{candidate.name}（一致は候補）</option>
-                      {/each}
-                    </select>
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-        {#if linkObservations.length}
-          <h3>接続候補（スイッチ情報） / 両端を対応付けた候補だけを推定として採用</h3>
-          <div class="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>採用</th>
-                  <th>候補</th>
-                  <th>接続元（機器・ポート）</th>
-                  <th>接続先（機器・ポート）</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each linkObservations as obs}
-                  {@const label = `${String(obs.value.localDevice)} ${String(obs.value.localPort)}`}
-                  {@const chosen = draft(obs.id)}
-                  <tr>
-                    <td>
-                      <input
-                        type="checkbox"
-                        aria-label={`${label}の接続候補を選択`}
-                        bind:checked={selected[obs.id]}
-                      >
-                    </td>
-                    <td>
-                      {String(obs.value.protocol).toUpperCase()}
-                      {label} →{String(obs.value.remoteDevice)}
-                      {String(obs.value.remotePort ?? '')}
-                      <br>
-                      {obs.value.linkKind === 'physical'
-                        ? '物理接続の推定'
-                        : 'MACテーブル：論理接続のみ（配線の証明にしない）'}
-                    </td>
-                    <td>
-                      <select
-                        aria-label={`${label}の接続元機器`}
-                        value={chosen.aDevice}
-                        onchange={(e) =>
-                          setDraft(obs.id, { aDevice: e.currentTarget.value, aPort: '' })}
-                      >
-                        <option value="">機器を選択</option>
-                        {#each siteDevices as device}
-                          <option value={device.id}>{device.name}</option>
-                        {/each}
-                      </select>
-                      <select
-                        aria-label={`${label}の接続元ポート`}
-                        value={chosen.aPort}
-                        onchange={(e) => setDraft(obs.id, { aPort: e.currentTarget.value })}
-                      >
-                        <option value="">ポート未確認</option>
-                        {#each doc.ports.filter((p) => p.deviceId === chosen.aDevice) as port}
-                          <option value={port.id}>{port.name}</option>
-                        {/each}
-                      </select>
-                    </td>
-                    <td>
-                      <select
-                        aria-label={`${label}の接続先機器`}
-                        value={chosen.bDevice}
-                        onchange={(e) =>
-                          setDraft(obs.id, { bDevice: e.currentTarget.value, bPort: '' })}
-                      >
-                        <option value="">不明端点として記録</option>
-                        {#each siteDevices as device}
-                          <option value={device.id}>{device.name}</option>
-                        {/each}
-                      </select>
-                      <select
-                        aria-label={`${label}の接続先ポート`}
-                        value={chosen.bPort}
-                        onchange={(e) => setDraft(obs.id, { bPort: e.currentTarget.value })}
-                      >
-                        <option value="">ポート未確認</option>
-                        {#each doc.ports.filter((p) => p.deviceId === chosen.bDevice) as port}
-                          <option value={port.id}>{port.name}</option>
-                        {/each}
-                      </select>
-                    </td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        {/if}
-        {#if managementObservations.length}
-          <h3>管理情報（AD・DHCPサーバー）</h3>
-          {#each managementObservations as obs}
-            <div class="audit-finding">
-              <input
-                type="checkbox"
-                aria-label={`${String(obs.value.name ?? obs.value.scopeId)}を採用候補に選択`}
-                bind:checked={selected[obs.id]}
-              >
-              {#if obs.type === 'adComputer'}
-                <span>
-                  AD：{String(obs.value.name)} /{String(obs.value.operatingSystem ?? 'OS不明')}
-                  （AD登録は稼働・IPを保証しません）
-                </span>
-                <select
-                  aria-label={`${String(obs.value.name)}の照合先`}
-                  value={mappings[obs.id] ?? ''}
-                  onchange={(e) => {
-                    mappings[obs.id] = e.currentTarget.value
-                  }}
-                >
-                  <option value="">照合先を選択</option>
-                  <option value="new">新規機器として採用</option>
-                  {#each siteDevices as device}
-                    <option value={device.id}>{device.name}</option>
-                  {/each}
-                </select>
-              {:else}
-                <span>
-                  DHCPスコープ：{String(obs.value.scopeId)}/{String(obs.value.subnetMask)} /{String(
-                    obs.value.start,
-                  )}
-                  ～{String(obs.value.end)} / サーバー{String(obs.value.server)}
-                  （記録済みのスコープは上書きしません）
-                </span>
-              {/if}
-            </div>
-          {/each}
-        {/if}
-        <h3>異常候補・追加確認</h3>
-        {#if !profile.roundId}
-          <p class="muted">
-            監査回次が「機器収集のみ」のため、異常候補は採用できません（参照のみ）。
-          </p>
-        {/if}
-        {#each result.findings as finding}
-          <label class="audit-finding">
-            <input type="checkbox" disabled={!profile.roundId} bind:checked={selected[finding.id]}>
-            No.{finding.itemNo} /{finding.status}
-            ：{finding.reason}
-            <small>次の確認：{finding.nextCheck}</small>
-          </label>
-        {/each}
-        <p class="muted">
-          選択した結果だけ採用します。初回はv2へ移行し、旧正本をarchiveへ保全します。監査判定は未確認の下書きとして扱います。
-        </p>
-        <button
-          type="button"
-          disabled={busy || !selectedKeys.length}
-          onclick={() =>
-            action('採用差分の作成', async () => {
-              preview = (await plan('0'.repeat(64), '未採用プレビュー')).doc
-            })}
-        >
-          論理マップ・採用差分を確認
-        </button>
-        <button
-          type="button"
-          class="primary"
-          disabled={busy || !selectedKeys.length}
-          onclick={() => action('選択した結果の取り込み', adopt)}
-        >
-          選択した結果を取り込む
-        </button>
-        {#if adoptStep >= 0}
-          {@render stepper('取り込みの段階', adoptView)}
-        {/if}
-        {#if preview}
-          <div class="audit-preview">
-            <h3>未採用プレビュー / 物理配線は生成しません</h3>
-            <Topology doc={preview} />
-          </div>
-        {/if}
       {/if}
       <details>
-        <summary>保存済みの実行結果</summary>
-        <button
-          type="button"
-          onclick={() =>
-            action('実行一覧の更新', async () => {
-              past = await client.call('audit/past')
-            })}
+        <summary>実行条件を変える</summary>
+        <fieldset
+          disabled={busy || active || files.auditBusy}
+          oninput={(e) => {
+            if ((e.target as HTMLInputElement).name !== 'routeApproval') {
+              delete profile.approvedPlanHash
+              executionPlan = null
+            }
+          }}
         >
-          実行一覧を更新
-        </button>
+          <legend>実行条件</legend>
+          <div class="audit-options">
+            <label>
+              調べるNIC<select
+                value={`${profile.ifIndex}:${profile.source}`}
+                onchange={(e) => selectNic(e.currentTarget.value)}
+              >
+                <option value="0:">NICを選択</option>
+                {#each addressChoices as address}
+                  <option value={`${address.ifIndex}:${address.address}`}>
+                    {inventory?.adapters.find((n) => n.ifIndex === address.ifIndex)?.name} /
+                    {address.address}/{address.prefixLength}
+                  </option>
+                {/each}
+              </select>
+            </label>
+            <label>
+              方式<select bind:value={profile.mode}>
+                <option value="standard">標準：同じLAN内のIPv4</option>
+                <option value="passive">通信の観測だけ（送信しない）</option>
+                <option value="detail">詳細調査：経路の承認が必要</option>
+              </select>
+            </label>
+            <label>
+              観測秒数<input type="number" min="5" max="1800" bind:value={profile.duration}>
+            </label>
+            <label>調べる範囲（IPv4 CIDR）<input bind:value={ranges}></label>
+            <label>
+              除外するIP・CIDR<input
+                bind:value={exclusions}
+                placeholder="192.168.10.10, 192.168.10.128/25"
+              >
+            </label>
+            <label>TCPポート<input bind:value={portText}></label>
+            <label>
+              DNS失敗率の閾値（0〜1、空欄＝統計のみ）<input
+                bind:value={ratioText}
+                inputmode="decimal"
+              >
+            </label>
+          </div>
+          <button type="button" onclick={() => action('ホスト設定の取得', diagnose)}>
+            NICを取得し直す
+          </button>
+          <div class="audit-features">
+            {#each featureLabels as [feature, label]}
+              <label>
+                <input type="checkbox" bind:checked={profile.features[feature]}>
+                {label}
+              </label>
+            {/each}
+          </div>
+          <label class="inline">
+            <input type="checkbox" bind:checked={keepDnsNames}>
+            DNS問い合わせ名を証跡に残す
+          </label>
+          {#if keepDnsNames}
+            <label>
+              保持日数<input type="number" min="1" max="3650" bind:value={retentionDays}>
+            </label>
+            <p class="warning">
+              問い合わせ名は閲覧先を含み得ます。期限後の削除は管理操作で行い、自動削除しません。
+            </p>
+          {/if}
+          {#if profile.mode === 'detail'}
+            <div class="audit-options">
+              <label>AD/DCサーバー（IPv4）<input bind:value={adServer}></label>
+              <label>AD検索ベース（OU）<input bind:value={adBase}></label>
+              <label>DHCPサーバー（IPv4・最大10）<input bind:value={dhcpServers}></label>
+            </div>
+            <p class="muted">
+              管理情報は読取のみで、資格情報を保存しません。AD登録コンピューターは台数だけ数えます。
+            </p>
+            <button
+              type="button"
+              onclick={() =>
+                action('経路と対象の確認', async () => {
+                  const request = await client.call<{ requestId: string }>('audit/plan', 'POST', {
+                    profile: currentProfile(),
+                  })
+                  const reply = await client.response(request.requestId)
+                  executionPlan = reply.executionPlan ?? null
+                })}
+            >
+              経路と対象を確認
+            </button>
+            {#if executionPlan}
+              <div class="confirm-box">
+                <p>
+                  送信元{executionPlan.source} / 対象{executionPlan.targets.length} / 計画{executionPlan.hash}
+                </p>
+                <ul>
+                  {#each executionPlan.routes as route}
+                    <li>
+                      {route.prefix} →{route.nextHop} / NIC{route.ifIndex} / metric{route.metric}
+                    </li>
+                  {/each}
+                </ul>
+                <label class="inline">
+                  <input
+                    type="checkbox"
+                    name="routeApproval"
+                    checked={profile.approvedPlanHash === executionPlan.hash}
+                    onchange={(e) => {
+                      profile.approvedPlanHash = e.currentTarget.checked
+                        ? executionPlan?.hash
+                        : undefined
+                    }}
+                  >
+                  表示した対象・経路でこの実行を承認
+                </label>
+              </div>
+            {/if}
+          {/if}
+        </fieldset>
+      </details>
+      <details>
+        <summary>スイッチ情報（LLDP/CDP/MACテーブル）を取り込む</summary>
+        <fieldset disabled={busy || active || files.auditBusy}>
+          <legend>オフライン取り込み</legend>
+          <p class="muted">
+            tylan-switch-export
+            v1形式のJSONを読み込みます。ネットワークへ送信せず、資格情報は受け付けません。
+          </p>
+          <label>
+            エクスポートJSON<input
+              type="file"
+              accept=".json,application/json"
+              onchange={(e) => {
+                switchFile = e.currentTarget.files?.[0] ?? null
+              }}
+            >
+          </label>
+          <button
+            type="button"
+            disabled={!switchFile || !doc.sites.length}
+            onclick={() => action('スイッチ情報の取り込み依頼', importSwitch)}
+          >
+            スイッチ情報を取り込む
+          </button>
+        </fieldset>
+      </details>
+      <details>
+        <summary>過去の実行を開く（{past.length}件）</summary>
         {#each past as old}
           <div>
-            <span>{old.runId} /{old.state}</span>
+            <span>{old.runId} /{stateLabels[old.state] ?? old.state}</span>
             <button
               type="button"
               disabled={busy || active}
@@ -1249,51 +911,267 @@
             >
               この実行を開く
             </button>
-            <button
-              type="button"
-              disabled={!result || active || busy}
-              onclick={() =>
-                action('比較元の読込', async () => {
-                  await client.call('audit/open', 'POST', { runId: old.runId })
-                  previous = await client.result(old.runId)
-                })}
-            >
-              比較元にする
-            </button>
           </div>
+        {:else}
+          <p class="muted">保存済みの実行はありません。</p>
         {/each}
       </details>
-      {#if diff}
-        <div class="confirm-box">
-          <h3>前回との差分</h3>
-          <p>
-            {diff.conditions.length
-              ? `実行条件・ツールに差があります（${diff.conditions.join(', ')}）。差分は条件の違いを含みます。`
-              : '同じ実行条件'}
-          </p>
-          <p>
-            {`追加 ${diff.added.length}件 / 変更 ${diff.changed.length}件 / 今回未観測 ${diff.unobserved.length}件`}
-          </p>
-          <h4>追加（今回初めて観測）</h4>
-          <ul>
-            {#each diff.added as device}
-              <li>{device.ip} /{device.mac ?? 'MAC未取得'}</li>
+    {/if}
+  </section>
+{/if}
+
+{#if view === 'diff'}
+  <section class="panel" aria-label="基準との差分">
+    <h2>基準との差分</h2>
+    {#if !result || !analysis}
+      <p>
+        まだ監査結果がありません。<a href="#/run">①実行</a>
+        で監査するか、過去の実行を開いてください。下の台帳（基準）は今すぐ編集できます。
+      </p>
+    {:else}
+      <p class="muted">
+        実行{result.runId}
+        ・{result.startedAt.slice(0, 16).replace('T', ' ')} ～
+        {result.endedAt.slice(11, 16)}
+        ・
+        {#each result.collectors as collector, i}
+          {i ? '、' : ''}
+          {String(collector.name)}
+          ：{collectorLabels[String(collector.state)] ?? String(collector.state)}
+        {/each}
+      </p>
+      {#if incomplete}
+        <p class="warning">
+          一部の収集が完了していません。見えなかったことを「問題なし」の根拠にしないでください。
+        </p>
+      {/if}
+      {#if otherSite}
+        <p class="warning">
+          この結果は別の拠点で実行したものです。拠点を切り替えて確認してください。
+        </p>
+      {/if}
+
+      <h3>ネットワークの基準</h3>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>基準にする</th>
+              <th>範囲</th>
+              <th>項目</th>
+              <th>基準</th>
+              <th>今回の観測</th>
+              <th>状態</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each analysis.baseline as row (row.key)}
+              <tr>
+                <td>
+                  {#if row.state === 'unset'}
+                    <input
+                      type="checkbox"
+                      aria-label={`${row.cidr}の${fieldLabels[row.field]}を基準にする`}
+                      bind:checked={selected[row.key]}
+                    >
+                  {/if}
+                </td>
+                <td>{row.cidr}</td>
+                <td>{fieldLabels[row.field]}</td>
+                <td>{row.expected.join(', ') || '未設定'}</td>
+                <td>{row.observed.join(', ') || '—'}</td>
+                <td><span class={`tag tag-${row.state}`}>{baselineLabels[row.state]}</span></td>
+              </tr>
             {/each}
-          </ul>
-          <h4>変更</h4>
-          <ul>
-            {#each diff.changed as change}
-              <li>{change.ip} /{change.fields.join('・')}：{change.before} →{change.after}</li>
+          </tbody>
+        </table>
+      </div>
+      {#if !analysis.poolsKnown}
+        <p class="muted">
+          DHCPの配布範囲が基準にないため、固定IP機器の判定はしていません（台帳の「ネットワーク →
+          DHCP」で範囲を登録すると判定します）。
+        </p>
+      {/if}
+
+      <h3>管理機器</h3>
+      <p class="muted">
+        プリンター・NAS・カメラなど、台帳で1台ずつ管理する機器です。MACで照合するので、DHCPでIPが変わっても同じ機器として扱います。
+      </p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>採用</th>
+              <th>区分</th>
+              <th>IP / MAC</th>
+              <th>理由・推定</th>
+              <th>種別</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each managed as row (row.key)}
+              {@render hostRow(row)}
+            {:else}
+              <tr>
+                <td colspan="5" class="empty">管理機器らしいものは見つかりませんでした。</td>
+              </tr>
             {/each}
-          </ul>
-          <h4>今回未観測（撤去とは判断しません）</h4>
-          <ul>
-            {#each diff.unobserved as device}
-              <li>{device.ip} /{device.mac ?? 'MAC未取得'}</li>
-            {/each}
-          </ul>
+          </tbody>
+        </table>
+      </div>
+      {#if analysis.unseen.length}
+        <p>
+          今回見えなかった台帳の機器（撤去とは判断しません）：{analysis.unseen
+            .map((d) => d.name)
+            .join('、')}
+        </p>
+      {/if}
+
+      <h3>利用端末（台数のみ）</h3>
+      <p class="muted">
+        社員PC・スマホはDHCPで毎日IPが変わるため、1台ずつは追いません。台数と内訳を回次に記録します。
+      </p>
+      {#each analysis.clients as summary}
+        <dl class="client-summary">
+          <dt>{summary.cidr}</dt>
+          <dd>
+            <strong>{summary.total}台</strong>（ランダムMAC{summary.randomMac}・169.254.x.x
+            {summary.linkLocal}
+            ）
+            <small>{summary.vendors.map((v) => `${v.name} ${v.count}`).join(' / ')}</small>
+          </dd>
+        </dl>
+      {:else}
+        <p>利用端末は観測されませんでした。</p>
+      {/each}
+      {#if analysis.adComputers}
+        <p>AD登録コンピューター：{analysis.adComputers}台（台帳には載せません）</p>
+      {/if}
+
+      {#if result.findings.length}
+        <h3>自動判定の下書き</h3>
+        {#each result.findings as finding}
+          <label class="audit-finding">
+            <input type="checkbox" bind:checked={selected[finding.id]}>
+            No.{finding.itemNo}
+            ：{finding.reason}
+            <small>次の確認：{finding.nextCheck}</small>
+          </label>
+        {/each}
+      {/if}
+
+      {#if scopeObservations.length}
+        <h3>DHCPサーバーの設定（管理情報）</h3>
+        {#each scopeObservations as obs}
+          <label class="audit-finding">
+            <input type="checkbox" bind:checked={selected[obs.id]}>
+            {String(obs.value.scopeId)}
+            /{String(obs.value.subnetMask)}
+            ：{String(obs.value.start)}
+            ～{String(obs.value.end)}
+            （サーバー{String(obs.value.server)}
+            ）を基準にする
+            <small>記録済みの配布範囲は上書きしません</small>
+          </label>
+        {/each}
+      {/if}
+
+      {#if linkObservations.length}
+        <h3>接続候補（スイッチ情報）</h3>
+        <p class="muted">両端の機器を選んだ候補だけを「推定」の接続として採用します。</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>採用</th>
+                <th>候補</th>
+                <th>接続元（機器・ポート）</th>
+                <th>接続先（機器・ポート）</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each linkObservations as obs}
+                {@const label = `${String(obs.value.localDevice)} ${String(obs.value.localPort)}`}
+                {@const chosen = draft(obs.id)}
+                <tr>
+                  <td>
+                    <input
+                      type="checkbox"
+                      aria-label={`${label}の接続候補を選択`}
+                      bind:checked={selected[obs.id]}
+                    >
+                  </td>
+                  <td>
+                    {String(obs.value.protocol).toUpperCase()}
+                    {label} →{String(obs.value.remoteDevice)}
+                    {String(obs.value.remotePort ?? '')}
+                    <small class="cell-secondary">
+                      {obs.value.linkKind === 'physical'
+                        ? '物理接続の推定'
+                        : 'MACテーブル：論理接続のみ（配線の証明にしない）'}
+                    </small>
+                  </td>
+                  {#each [
+                    ['a', '接続元'],
+                    ['b', '接続先'],
+                  ] as const as [end, endLabel]}
+                    {@const device = end === 'a' ? chosen.aDevice : chosen.bDevice}
+                    <td>
+                      <select
+                        aria-label={`${label}の${endLabel}機器`}
+                        value={device}
+                        onchange={(e) =>
+                          setDraft(
+                            obs.id,
+                            end === 'a'
+                              ? { aDevice: e.currentTarget.value, aPort: '' }
+                              : { bDevice: e.currentTarget.value, bPort: '' },
+                          )}
+                      >
+                        <option value="">
+                          {end === 'a' ? '機器を選択' : '不明端点として記録'}
+                        </option>
+                        {#each siteDevices as d}
+                          <option value={d.id}>{d.name}</option>
+                        {/each}
+                      </select>
+                      <select
+                        aria-label={`${label}の${endLabel}ポート`}
+                        value={end === 'a' ? chosen.aPort : chosen.bPort}
+                        onchange={(e) =>
+                          setDraft(
+                            obs.id,
+                            end === 'a'
+                              ? { aPort: e.currentTarget.value }
+                              : { bPort: e.currentTarget.value },
+                          )}
+                      >
+                        <option value="">ポート未確認</option>
+                        {#each doc.ports.filter((p) => p.deviceId === device) as port}
+                          <option value={port.id}>{port.name}</option>
+                        {/each}
+                      </select>
+                    </td>
+                  {/each}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         </div>
       {/if}
+
+      <div class="adopt-bar">
+        <label>確認者<input bind:value={checkedBy} maxlength="100"></label>
+        <button
+          type="button"
+          class="primary"
+          disabled={busy || files.auditBusy || otherSite || !checkedBy.trim()}
+          onclick={() => action('取り込み', adopt)}
+        >
+          選んだ{selectedKeys.length}件と端末台数を取り込む
+        </button>
+        <span class="muted">証跡を封印してから保存します。判定は③で確定します。</span>
+      </div>
     {/if}
   </section>
 {/if}
@@ -1303,7 +1181,47 @@
     margin: var(--space-md) 0;
     padding: var(--space-sm);
     border: 1px solid var(--line);
-    border-radius: 0;
+  }
+  details {
+    margin-top: var(--space-md);
+  }
+  summary {
+    min-height: 32px;
+    cursor: pointer;
+    color: var(--link);
+  }
+  .run-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-lg);
+    padding: var(--space-md);
+    border: 1px solid var(--line);
+    background: var(--paper-muted);
+  }
+  .run-summary {
+    display: grid;
+    flex: 1 1 420px;
+    grid-template-columns: 112px minmax(0, 1fr);
+    gap: var(--space-2xs) var(--space-sm);
+    margin: 0;
+  }
+  .run-summary dt {
+    color: var(--muted);
+  }
+  .run-summary dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .run-summary small,
+  .client-summary small {
+    display: block;
+    color: var(--muted);
+  }
+  button.start {
+    min-width: 200px;
+    min-height: 56px;
+    font-size: var(--text-lg);
   }
   .audit-options {
     display: grid;
@@ -1336,98 +1254,63 @@
   }
   .audit-finding small {
     grid-column: 2;
+    color: var(--muted);
   }
-  .audit-preview {
-    height: 650px;
-    margin-top: var(--space-md);
+  .client-summary {
+    display: grid;
+    grid-template-columns: 160px minmax(0, 1fr);
+    margin: var(--space-xs) 0;
+  }
+  .client-summary dd {
+    margin: 0;
+  }
+  .tag {
+    display: inline-block;
+    padding: 0 var(--space-2xs);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .tag-rogue,
+  .tag-differs {
+    border-color: var(--error-line);
+    background: var(--error-face);
+    color: var(--error-ink);
+  }
+  .tag-unregistered,
+  .tag-unset {
+    border-color: var(--warning-line);
+    background: var(--warning-face);
+    color: var(--warning-ink);
+  }
+  .tag-candidate {
+    border-color: var(--info-line);
+    background: var(--info-face);
+    color: var(--info-ink);
+  }
+  .tag-known,
+  .tag-match {
+    border-color: var(--success-line);
+    background: var(--success-face);
+    color: var(--success-ink);
+  }
+  .adopt-bar {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: var(--space-sm);
+    margin-top: var(--space-lg);
+    padding: var(--space-sm);
+    border-top: 2px solid var(--accent);
+    background: var(--chrome);
+  }
+  .button-link {
+    margin-left: var(--space-sm);
   }
   button {
     margin: var(--space-2xs);
-  }
-  .steps {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0;
-    margin: var(--space-sm) 0;
-    padding: 0;
-    list-style: none;
-    counter-reset: step;
-  }
-  .steps li {
-    counter-increment: step;
-    padding: var(--space-xs) var(--space-sm);
-    border-bottom: 2px solid var(--line);
-    color: var(--muted);
-    font-size: 13px;
-  }
-  .steps li::before {
-    content: counter(step) ". ";
-  }
-  .steps li.done {
-    border-color: var(--success-line);
-    color: var(--success-ink);
-  }
-  .steps li.done::before {
-    content: "✓ ";
-  }
-  .steps li.current {
-    border-color: var(--accent);
-    background: var(--info-face);
-    color: var(--info-ink);
-    font-weight: 700;
-  }
-  .steps li.failed {
-    border-color: var(--error-line);
-    color: var(--error-ink);
-  }
-  .steps li.failed::before {
-    content: "× ";
-  }
-  .steps li.skipped {
-    border-style: dashed;
-    text-decoration: line-through;
-  }
-  .meter {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-2xs) var(--space-sm);
-    font-variant-numeric: tabular-nums;
-  }
-  .meter progress {
-    flex: 1 1 160px;
-    min-width: 120px;
-    max-width: 360px;
-    height: 16px;
-    accent-color: var(--accent);
-  }
-  .busy {
-    margin: var(--space-xs) 0;
-  }
-  .job-chip {
-    position: fixed;
-    right: 16px;
-    bottom: 16px;
-    z-index: var(--z-toast);
-    display: grid;
-    gap: var(--space-2xs);
-    width: min(360px, calc(100% - 32px));
-    padding: var(--space-sm) var(--space-md);
-    border: 2px solid var(--accent);
-    border-radius: 0;
-    background: var(--chrome);
-    color: var(--ink);
-    text-decoration: none;
-  }
-  .job-chip:hover {
-    background: var(--control-hover);
-  }
-  .job-chip:active {
-    background: var(--control-pressed);
-  }
-  .job-chip:focus-visible {
-    outline: 2px solid var(--color-focus);
-    outline-offset: 2px;
   }
   input[type="checkbox"] {
     width: 16px;

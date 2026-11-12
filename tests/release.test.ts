@@ -173,9 +173,11 @@ test('tylan.cmd起動の編集画面で開く・図・PNG・自動保存・公�
   try {
     const page = await context.newPage()
     await page.goto(url)
+    await page.getByText('別のファイルを開く・名前を決めて作る').click()
     await page.getByRole('button', { name: 'network.json を開く' }).click()
-    await page.getByRole('button', { name: '東京', exact: true }).waitFor()
-    await page.getByRole('link', { name: 'トポロジー', exact: true }).click()
+    await page.getByText('network.json を開きました。').waitFor()
+    await page.getByRole('link', { name: /差分・基準/ }).click()
+    await page.getByRole('link', { name: '構成図', exact: true }).click()
     await page.locator('.device-node').first().waitFor()
     expect(await page.locator('.device-node').count()).toBe(2)
     await page.getByRole('button', { name: '全体を表示' }).click()
@@ -184,7 +186,7 @@ test('tylan.cmd起動の編集画面で開く・図・PNG・自動保存・公�
     const png = await pngPromise
     expect(png.suggestedFilename()).toMatch(/\.png$/)
     expect(await png.failure()).toBeNull()
-    await page.getByRole('link', { name: '検証・書き出し', exact: true }).click()
+    await page.getByRole('link', { name: /公開/ }).click()
     await page.getByRole('checkbox', { name: '東京', exact: true }).check()
     // Ticking a site is a change: it is autosaved to the file on disk as revision 1.
     const saved = async () =>
@@ -245,10 +247,12 @@ test.runIf(existsSync('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.
       const { context, errors, requests } = await watchedContext(edge, base)
       const page = await context.newPage()
       await page.goto(url)
+      await page.getByText('別のファイルを開く・名前を決めて作る').click()
       await page.getByRole('button', { name: 'network.json を開く' }).click()
-      // Opening ends on the project screen; navigate only after it has finished.
+      // Opening ends on step 1; navigate only after it has finished.
       await page.getByText('network.json を開きました。').waitFor()
-      await page.getByRole('link', { name: 'トポロジー', exact: true }).click()
+      await page.getByRole('link', { name: /差分・基準/ }).click()
+      await page.getByRole('link', { name: '構成図', exact: true }).click()
       await page.locator('.device-node').first().waitFor()
       expect(await page.locator('.device-node').count()).toBe(9)
       await page.getByRole('button', { name: '全体を表示' }).click()

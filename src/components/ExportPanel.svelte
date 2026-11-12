@@ -1,6 +1,7 @@
 <script lang="ts">
   import viewerTemplate from 'virtual:viewer-template'
   import { documentCsv } from '../lib/csv'
+  import { fidget } from '../lib/fidget.svelte'
   import type { FileSession } from '../lib/file-session.svelte'
   import { exportFilename } from '../lib/io'
   import { nowJst } from '../lib/platform'
@@ -10,7 +11,6 @@
   import type { Workspace } from '../lib/store.svelte'
 
   let { workspace, files }: { workspace: Workspace; files: FileSession } = $props()
-  let message = $state('')
   let error = $state('')
   let previewed = $state('')
   const doc = $derived(workspace.doc)
@@ -32,9 +32,11 @@
   })
   async function run(action: () => Promise<string | null>) {
     error = ''
-    message = ''
     try {
-      message = (await action()) ?? ''
+      const done = await action()
+      if (done) {
+        fidget.say(done)
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
     }
@@ -169,9 +171,6 @@
     <button type="button" onclick={() => csv('audit')}>監査CSV</button>
     <button type="button" onclick={() => csv('actions')}>対応事項CSV</button>
   </div>
-  {#if message}
-    <p role="status" class="notice">{message}</p>
-  {/if}
   {#if error}
     <p role="alert" class="error">{error}</p>
   {/if}

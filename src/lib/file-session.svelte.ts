@@ -229,11 +229,9 @@ export function createFileSession(workspace: Workspace, folder: Folder, delay = 
         if (source) {
           parseDocument(source.text, source.size) // reject a broken source before creating anything
           workspace.load(source.text, source.size)
-          if (workspace.doc.schemaVersion === 2) {
-            workspace.commit((doc) => {
-              doc.documentId = createId('doc')
-            })
-          }
+          workspace.commit((doc) => {
+            doc.documentId = createId('doc')
+          })
         } else {
           workspace.reset()
         }

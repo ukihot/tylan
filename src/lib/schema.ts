@@ -45,6 +45,7 @@ const target = z.strictObject({
   id: z.string().regex(/^(dev|lnk|wln|seg|prt)_[a-zA-Z0-9]{16}$/),
 })
 const range = z.strictObject({ start: ip, end: ip })
+const count = z.number().int().min(0).max(100000)
 export const AuditItemSchema = z.strictObject({
   no: z.number().int().min(1).max(23),
   category: name,
@@ -154,6 +155,8 @@ export const entitySchemas = {
     segmentId: ref('segments'),
     serverDeviceId: ref('devices').nullable(),
     serverUnknown: short,
+    /** the approved server's IPv4 as seen on the wire (DHCP server identifier) */
+    serverAddress: ip.nullable(),
     ranges: z.array(range).max(100),
     exclusions: z.array(range).max(100),
     reservations: z
@@ -202,6 +205,20 @@ export const entitySchemas = {
     startDate: date,
     endDate: date,
     surveyor: short,
+    /** DHCP clients are counted, never registered: their IPs change daily. One row per run and segment. */
+    clients: z
+      .array(
+        z.strictObject({
+          segmentId: ref('segments'),
+          runId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+          observedDate: z.iso.date(),
+          total: count,
+          randomMac: count,
+          linkLocal: count,
+          vendors: z.array(z.strictObject({ name, count })).max(30),
+        }),
+      )
+      .max(200),
   }),
   auditResults: z
     .strictObject({
@@ -361,9 +378,9 @@ export type ImportBatch = z.infer<typeof ImportBatchSchema>
 export const DocSchema = z
   .strictObject({
     format: z.literal('tylan'),
-    schemaVersion: z.union([z.literal(1), z.literal(2)]),
-    documentId: id('doc').optional(),
-    importBatches: z.array(ImportBatchSchema).max(5000).optional(),
+    schemaVersion: z.literal(3),
+    documentId: id('doc'),
+    importBatches: z.array(ImportBatchSchema).max(5000),
     project: ProjectSchema,
     sites: z.array(entitySchemas.sites).max(50),
     locations: z.array(entitySchemas.locations).max(5000),
@@ -383,25 +400,8 @@ export const DocSchema = z
     publishSettings: PublishSettingsSchema,
   })
   .superRefine((doc, ctx) => {
-    if (doc.schemaVersion === 2 && (!doc.documentId || !doc.importBatches)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['documentId'],
-        message: 'v2には正本IDと取り込み記録が必要です',
-      })
-    }
-    if (
-      doc.schemaVersion === 1 &&
-      (doc.documentId !== undefined || doc.importBatches !== undefined)
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['schemaVersion'],
-        message: 'v1へv2の項目を追加できません',
-      })
-    }
     const ids = new Set<string>()
-    for (const batch of doc.importBatches ?? []) {
+    for (const batch of doc.importBatches) {
       if (ids.has(batch.id)) {
         ctx.addIssue({
           code: 'custom',
@@ -461,7 +461,10 @@ export function newEntity<K extends Collection>(collection: K, entityId: string)
 export function emptyDoc(now: string, projectId: string): Doc {
   return {
     format: 'tylan',
-    schemaVersion: 1,
+    schemaVersion: 3,
+    // Derived from the random project id: one per document, new again when a file is copied.
+    documentId: `doc_${projectId.slice(4)}`,
+    importBatches: [],
     project: {
       id: projectId,
       name: '新規プロジェクト',

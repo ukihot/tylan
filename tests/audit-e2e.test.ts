@@ -5,9 +5,8 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { type Browser, chromium, type Page } from 'playwright'
 import { afterAll, beforeAll, expect, test } from 'vitest'
-import { startRound } from '../src/lib/commands'
 import type { Doc } from '../src/lib/schema'
-import { fixture, id, NOW } from '../src/lib/test-fixture'
+import { fixtureWithRound, id, NOW } from '../src/lib/test-fixture'
 
 let browser: Browser
 let launcher: ChildProcess
@@ -18,22 +17,7 @@ beforeAll(async () => {
   root = resolve('.build', 'e2e', '監査 フォルダ')
   await rm(root, { recursive: true, force: true })
   await mkdir(join(root, 'working'), { recursive: true })
-  const round = startRound(
-    fixture(),
-    {
-      id: id('rnd', 1),
-      name: '2026年度',
-      siteIds: [id('sit', 1)],
-      startDate: null,
-      endDate: null,
-      surveyor: null,
-    },
-    Array.from({ length: 20 }, (_, n) => id('aud', n + 1)),
-  )
-  if (!round.ok) {
-    throw new Error(round.errors.map((e) => e.message).join('\n'))
-  }
-  await writeFile(join(root, 'working', 'network.json'), JSON.stringify(round.doc))
+  await writeFile(join(root, 'working', 'network.json'), JSON.stringify(fixtureWithRound()))
   const synthetic = join(root, 'synthetic.json')
   await writeFile(
     synthetic,
@@ -148,31 +132,30 @@ const saved = async () =>
 
 async function openAudit(page: Page) {
   await page.goto(url)
+  await page.getByText('別のファイルを開く・名前を決めて作る').click()
   await page.getByRole('button', { name: 'network.json を開く' }).click()
   await page.getByText('network.json を開きました。').waitFor()
-  await page.getByRole('link', { name: '監査', exact: true }).click()
 }
 
 test('start → result → adopt → Undo through the shipped launcher and job owner', async () => {
   const page = await browser.newPage()
   try {
     await openAudit(page)
-    await page.getByRole('checkbox', { name: 'IPv6ローカル設定確認（送信なし）' }).uncheck()
-    await page.getByRole('button', { name: 'ホスト設定を取得' }).click()
-    await page.getByText(/IPv6ローカル設定確認はOFFです/).waitFor()
-    await page.getByRole('combobox', { name: /送信元NIC/ }).selectOption('4:192.168.1.20')
-    await page.getByRole('button', { name: '現地監査を開始' }).click()
-    await page.getByText('収集結果を取得しました。正本には未採用です。').waitFor({ timeout: 20000 })
-    // A finished collection is not a saved import.
-    expect((await saved()).schemaVersion).toBe(1)
+    // The NIC is found on open: the start button is the only step.
+    await page.getByRole('button', { name: '監査を開始' }).click()
+    // A finished run moves to its diff; it is not a saved import yet.
+    await page.getByRole('heading', { name: '基準との差分' }).waitFor({ timeout: 20000 })
+    expect((await saved()).importBatches).toEqual([])
 
-    await page.getByRole('checkbox', { name: '192.168.1.42を台帳に追加' }).check()
-    await page.getByLabel(/No\.14/).check()
+    expect(await page.getByRole('checkbox', { name: '192.168.1.42を台帳に追加' }).isChecked()).toBe(
+      true,
+    )
+    expect(await page.getByLabel(/No\.14/).isChecked()).toBe(true)
     await page.getByRole('textbox', { name: '確認者' }).fill('調査者')
-    await page.getByRole('button', { name: '選択した結果を取り込む' }).click()
-    await page.getByText(/選択した結果を保存しました/).waitFor({ timeout: 40000 })
+    await page.getByRole('button', { name: /取り込む/ }).click()
+    await page.getByRole('heading', { name: '20項目の判定' }).waitFor({ timeout: 40000 })
     const adopted = await saved()
-    expect(adopted.schemaVersion).toBe(2)
+    expect(adopted.schemaVersion).toBe(3)
     expect(adopted.devices).toHaveLength(3)
     expect(adopted.importBatches?.map((b) => b.state)).toEqual(['applied'])
     const item14 = adopted.auditResults.find((r) => r.itemNo === 14 && r.scope === 'summary')!

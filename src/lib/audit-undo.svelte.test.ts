@@ -1,14 +1,13 @@
 import { expect, test } from 'vitest'
 import { createFileSession } from './file-session.svelte'
-import { migrateV2 } from './import-plan'
 import { createWorkspace } from './store.svelte'
 import { fixture, id, memoryFolder, NOW } from './test-fixture'
 
 test('import Undo restores business values and keeps reverted history through ordinary Undo', () => {
-  const workspace = createWorkspace(migrateV2(fixture(), id('doc', 1)))
+  const workspace = createWorkspace(fixture())
   const candidate = structuredClone(workspace.doc)
   candidate.devices[0]!.name = 'observed'
-  candidate.importBatches!.push({
+  candidate.importBatches.push({
     id: id('imp', 1),
     runId: 'run1',
     packageHash: 'a'.repeat(64),

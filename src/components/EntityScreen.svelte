@@ -266,7 +266,9 @@
           </div>
         {/if}
         <FieldEditor
-          schema={entitySchemas[collection]}
+          schema={collection === 'auditRounds'
+            ? entitySchemas.auditRounds.omit({ clients: true })
+            : entitySchemas[collection]}
           bind:value={draft}
           {doc}
           issues={workspace.issues}

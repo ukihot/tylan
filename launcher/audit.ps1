@@ -234,7 +234,7 @@ function Route-Audit($req) {
     if ($candidateBytes.Length -gt 10MB) { Fail 413 'canonical exceeds limit' }
     $candidate = ConvertFrom-Json $body.text
     $batches = @($candidate.importBatches | Where-Object { $_.id -eq $id -and $_.state -eq 'applied' })
-    if ($candidate.schemaVersion -ne 2 -or $candidate.documentId -notmatch '^doc_[a-zA-Z0-9]{16}$' -or $batches.Count -ne 1) { Fail 400 'invalid import candidate' }
+    if ($candidate.schemaVersion -ne 3 -or $candidate.documentId -notmatch '^doc_[a-zA-Z0-9]{16}$' -or $batches.Count -ne 1) { Fail 400 'invalid import candidate' }
     $batch = $batches[0]
     # An importId names one run, selection and sealed package: the same id with other content is refused.
     $run = @($auditRuns.Values | Where-Object { $_.runId -eq $batch.runId })

@@ -1,33 +1,34 @@
 import { type Collection, prefixes } from './schema'
-export const screenCollections = {
-  project: ['sites', 'locations'],
-  devices: ['devices'],
-  ports: ['ports', 'links'],
-  network: ['segments', 'ipAssignments', 'dhcpScopes', 'wirelessNetworks'],
-  audit: ['auditRounds', 'auditResults', 'evidence'],
-  actions: ['actionItems'],
-} as const
-export const screens = [
-  ['project', '開始・プロジェクト'],
-  ['topology', 'トポロジー'],
-  ['devices', '機器・資産台帳'],
-  ['ports', 'ポート・接続'],
-  ['network', 'ネットワーク設定'],
-  ['audit', '監査'],
-  ['actions', '対応事項'],
-  ['export', '検証・書き出し'],
+/** One audit, five steps in the order the work happens. The baseline ledger lives inside step 2. */
+export const steps = [
+  ['run', '実行', '現地LANを調べる'],
+  ['diff', '差分・基準', '基準との差を確認して取り込む'],
+  ['judge', '判定', '20項目を判定する'],
+  ['actions', '対応', '要対応を追跡する'],
+  ['publish', '公開', '閲覧用HTML・CSVを出す'],
 ] as const
+export type Step = (typeof steps)[number][0]
+/** The baseline: what the network should look like. Edited only here, read by every run. */
+export const ledgerGroups = [
+  ['管理機器', ['devices', 'ports', 'ipAssignments']],
+  ['ネットワーク', ['segments', 'dhcpScopes', 'wirelessNetworks']],
+  ['配線', ['links']],
+  ['拠点・設置場所', ['sites', 'locations']],
+  ['構成図', ['layouts']],
+] as const satisfies readonly (readonly [string, readonly Collection[]])[]
+export const stepCollections: Partial<Record<Step, readonly Collection[]>> = {
+  diff: ledgerGroups.flatMap(([, c]) => c),
+  judge: ['auditResults', 'auditRounds', 'evidence'],
+  actions: ['actionItems'],
+}
 export function entityHref(id: string | null, path = '') {
   const collection =
     (Object.keys(prefixes) as Collection[]).find((k) => id?.startsWith(`${prefixes[k]}_`)) ??
     path.split('.')[0]
-  if (collection === 'layouts') {
-    return '#/topology'
-  }
-  for (const [screen, collections] of Object.entries(screenCollections)) {
+  for (const [step, collections] of Object.entries(stepCollections)) {
     if ((collections as readonly string[]).includes(collection ?? '')) {
-      return `#/${screen}/${collection}/${id ?? ''}`
+      return `#/${step}/${collection}/${collection === 'layouts' ? '' : (id ?? '')}`
     }
   }
-  return '#/export'
+  return '#/publish'
 }

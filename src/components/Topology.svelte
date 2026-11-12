@@ -422,7 +422,7 @@
   {#if workspace}
     <details class="layout-settings">
       <summary>図の配置・ビューポート・除外対象を管理</summary>
-      <a href="#/topology/layouts">図の配置を編集</a>
+      <a href="#/diff/layouts/edit">図の配置データを編集</a>
       <button type="button" onclick={() => updateLayout((l) => (l.hidden = []))}>
         除外した機器をすべて戻す
       </button>

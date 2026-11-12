@@ -1,3 +1,4 @@
+import { startRound } from './commands'
 import { ConflictError, type Folder } from './folder'
 import { emptyDoc, newEntity } from './schema'
 export const NOW = '2026-11-05T14:30:00+09:00'
@@ -91,4 +92,22 @@ export function fixture() {
     siteId: id('sit', 1),
   })
   return doc
+}
+/** fixture() plus the round the first run would make: 20 unchecked items for 東京. */
+export function fixtureWithRound(documentId = id('doc', 1)) {
+  const doc = { ...fixture(), documentId }
+  const round = {
+    ...newEntity('auditRounds', id('rnd', 1)),
+    name: '2026年度',
+    siteIds: [id('sit', 1)],
+  }
+  const started = startRound(
+    doc,
+    round,
+    Array.from({ length: 20 }, (_, n) => id('aud', n + 1)),
+  )
+  if (!started.ok) {
+    throw new Error(started.errors.map((e) => e.message).join('\n'))
+  }
+  return started.doc
 }

@@ -240,8 +240,7 @@ legend {
 }
 .app-shell {
   display: grid;
-  grid-template-columns: 196px minmax(0, 1fr);
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
   width: 100%;
   max-width: var(--container);
   min-height: 100dvh;
@@ -250,10 +249,10 @@ legend {
   background: var(--workspace);
 }
 .system-bar {
-  grid-column: 1 / -1;
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-md);
   min-height: 48px;
   padding: var(--space-2xs) var(--space-md);
   border-bottom: 1px solid var(--accent-shadow);
@@ -265,8 +264,6 @@ legend {
   align-items: center;
   gap: var(--space-sm);
   min-height: 40px;
-  color: var(--accent-ink);
-  text-decoration: none;
   white-space: nowrap;
 }
 .brand svg {
@@ -286,115 +283,128 @@ legend {
   border-left: 1px solid var(--accent-highlight);
   font-size: 13px;
 }
-.system-version {
-  margin-left: auto;
-  font-size: 12px;
-}
-.menu-toggle {
-  display: none;
-}
-.sidebar {
+.site-switch {
   display: flex;
-  flex-direction: column;
-  min-width: 0;
-  border-right: 1px solid var(--line);
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 13px;
+}
+.site-name {
+  font-size: 13px;
+}
+.step-bar {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
   background: var(--chrome);
 }
-.sidebar-title {
-  margin: 0;
-  padding: var(--space-sm);
-  border-bottom: 1px solid var(--line);
-  box-shadow: inset 0 1px var(--highlight);
-  font-size: 14px;
-}
-nav[aria-label="メインナビゲーション"] {
-  display: flex;
-  flex-direction: column;
-  padding: var(--space-sm) var(--space-xs);
-}
-nav[aria-label="メインナビゲーション"] a {
+.step-bar a {
   position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-xs);
-  min-height: 44px;
-  padding: var(--space-2xs) var(--space-xs);
+  min-height: 56px;
+  padding: var(--space-xs) var(--space-sm);
+  border-right: 1px solid var(--line);
   color: var(--ink);
-  font-size: 13px;
   text-decoration: none;
-  white-space: nowrap;
 }
-nav[aria-label="メインナビゲーション"] a:hover {
+.step-bar a:hover {
   background: var(--control-hover);
 }
-nav[aria-label="メインナビゲーション"] a.active {
+.step-bar a[aria-current="step"] {
+  background: var(--surface);
+  box-shadow: inset 0 -3px var(--accent);
+}
+.step-no {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-family: var(--mono);
+  font-weight: 700;
+}
+.step-bar a[aria-current="step"] .step-no {
+  border-color: var(--accent);
   background: var(--accent);
   color: var(--accent-ink);
 }
-nav[aria-label="メインナビゲーション"] svg {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1;
-  shape-rendering: crispEdges;
+.step-text {
+  display: grid;
+  min-width: 0;
 }
-.sidebar-foot {
-  margin-top: auto;
-  padding: var(--space-md) var(--space-sm);
-  border-top: 1px solid var(--line);
+.step-text small {
+  overflow: hidden;
+  color: var(--muted);
   font-size: 12px;
-  line-height: 1.7;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.sidebar-foot strong {
-  font-weight: 400;
+.step-bar em {
+  margin-left: auto;
+  padding: 0 var(--space-2xs);
+  border: 1px solid var(--warning-line);
+  background: var(--warning-face);
+  color: var(--warning-ink);
+  font-size: 12px;
+  font-style: normal;
+  white-space: nowrap;
 }
-.sidebar-foot p {
-  margin: var(--space-xs) 0;
-  color: var(--muted);
+.start-panel button.start {
+  min-height: 56px;
+  min-width: 280px;
+  margin: var(--space-md) 0 var(--space-xs);
+  font-size: var(--text-lg);
 }
-.sidebar-foot small {
-  color: var(--muted);
+.start-panel details {
+  margin-top: var(--space-lg);
+}
+.ledger {
+  margin-top: var(--space-xl);
+}
+.ledger-head {
+  padding: var(--space-xs) 0;
+  border-bottom: 2px solid var(--accent);
+}
+.subtabs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: var(--space-2xs) var(--space-md);
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  background: var(--control-face);
+  color: var(--ink);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.subtabs a[aria-current="page"] {
+  background: var(--surface);
+  color: var(--accent);
+  font-weight: 700;
+}
+.subtabs.minor a {
+  min-height: 28px;
+  font-size: 13px;
 }
 main {
   min-width: 0;
   padding: 0 var(--space-md) var(--space-md);
 }
-.app-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  min-height: 84px;
-  margin: 0 calc(-1 * var(--space-md)) var(--space-md);
-  padding: var(--space-sm) var(--space-md);
-  border-bottom: 1px solid var(--line);
-  box-shadow: inset 0 1px var(--highlight);
-  background: var(--chrome);
-}
-.project-heading {
-  min-width: 0;
-}
-.app-header h1 {
-  margin: 0 0 var(--space-2xs);
-}
-.project-revision {
-  color: var(--muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
 .header-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  margin-left: auto;
   flex-wrap: wrap;
   gap: var(--space-xs);
 }
 .file-name {
   max-width: 240px;
-  color: var(--ink);
+  color: var(--accent-ink);
   font-family: var(--mono);
   font-size: 12px;
   overflow-wrap: anywhere;
@@ -1189,25 +1199,7 @@ caption {
   }
 }
 @media (max-width: 960px) {
-  .app-shell {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .menu-toggle {
-    display: block;
-    margin-left: auto;
-  }
-  .system-version {
-    display: none;
-  }
-  .sidebar {
-    display: none;
-  }
-  .sidebar.menu-open {
-    display: block;
-    border-bottom: 1px solid var(--line);
-    border-right: 0;
-  }
-  .sidebar-foot {
+  .step-text small {
     display: none;
   }
   .entity-layout:has(.detail) {
@@ -1232,8 +1224,9 @@ caption {
   .viewer-masthead > span:nth-child(2) {
     display: none;
   }
-  .system-bar .menu-toggle {
-    font-size: 13px;
+  .step-bar {
+    grid-template-columns: repeat(5, max-content);
+    overflow-x: auto;
   }
   main,
   .viewer-shell {

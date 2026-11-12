@@ -118,6 +118,7 @@ describe('FCISの更新と監査', () => {
         startDate: '2026-11-05',
         endDate: null,
         surveyor: null,
+        clients: [],
       },
       Array.from({ length: 20 }, (_, i) => id('aud', i + 1)),
     )
@@ -140,6 +141,7 @@ describe('FCISの更新と監査', () => {
         startDate: '2026-11-05',
         endDate: null,
         surveyor: null,
+        clients: [],
       },
       Array.from({ length: 20 }, (_, i) => id('aud', i + 1)),
     )

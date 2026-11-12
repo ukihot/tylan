@@ -3,10 +3,10 @@ import { createHash } from 'node:crypto'
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, expect, test } from 'vitest'
-import { migrateV2, planImport } from '../src/lib/import-plan'
+import { planImport } from '../src/lib/import-plan'
 import { prepareExport } from '../src/lib/io'
 import type { Doc } from '../src/lib/schema'
-import { fixture, id, NOW } from '../src/lib/test-fixture'
+import { fixtureWithRound, id, NOW } from '../src/lib/test-fixture'
 
 let child: ChildProcess
 let base: string
@@ -164,17 +164,14 @@ test('real IPC seals evidence before canonical commit and reconciles a lost ackn
       { timeout: 20000 },
     )
     .toBe(true)
-  const doc = migrateV2(fixture(), id('doc', 1))
+  const doc = fixtureWithRound(id('doc', 1))
   const created = await (
     await call('file?path=working/network.json&expect=new', 'PUT', JSON.stringify(doc))
   ).json()
   const plan = await planImport(doc, collection, {
-    documentId: doc.documentId!,
     siteId: id('sit', 1),
-    segmentId: id('seg', 1),
-    roundId: null,
-    selected: ['printer'],
-    mappings: {},
+    roundId: id('rnd', 1),
+    selected: ['host:00:11:22:33:44:55'],
     checkedBy: 'tester',
     now: NOW,
     packageHash: sealed.package!.hash,
@@ -286,17 +283,14 @@ async function prepared(file: string, edit?: (candidate: Doc) => void) {
     (await json<{ requestId: string }>(call(`audit/runs/${runId}/evidence`, 'POST'))).requestId,
   )
   expect(sealed.accepted, sealed.error).toBe(true)
-  const doc = migrateV2(fixture(), id('doc', 7))
+  const doc = fixtureWithRound(id('doc', 7))
   const created = await json<{ lastModified: string }>(
     call(`file?path=working/${file}&expect=new`, 'PUT', JSON.stringify(doc)),
   )
   const plan = await planImport(doc, collection, {
-    documentId: doc.documentId!,
     siteId: id('sit', 1),
-    segmentId: id('seg', 1),
-    roundId: null,
-    selected: ['printer'],
-    mappings: {},
+    roundId: id('rnd', 1),
+    selected: ['host:00:11:22:33:44:55'],
     checkedBy: 'tester',
     now: NOW,
     packageHash: sealed.package!.hash,
@@ -345,13 +339,13 @@ test('a read never pairs one content with another version stamp while a writer r
 
 test('importId stays bound to its run, selection and evidence package', async () => {
   const unknown = await prepared('bind-unknown.json', (doc) => {
-    doc.importBatches![0]!.runId = 'neverStartedHere'
+    doc.importBatches[0]!.runId = 'neverStartedHere'
   })
   expect(unknown.response.status).toBe(403)
   const first = await prepared('bind.json')
   expect(first.response.status).toBe(202)
   const tampered = JSON.parse(first.body.text) as Doc
-  tampered.importBatches![0]!.selectionHash = 'f'.repeat(64)
+  tampered.importBatches[0]!.selectionHash = 'f'.repeat(64)
   const again = await call(
     'imports/prepare',
     'POST',

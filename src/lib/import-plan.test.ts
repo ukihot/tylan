@@ -1,23 +1,49 @@
 import { expect, test } from 'vitest'
-import { groupDevices, migrateV2, planImport } from './import-plan'
-import { parseDocument } from './io'
+import { analyze, baselineFor, planImport } from './import-plan'
 import { toPublic } from './publish'
-import { fixture, id, NOW } from './test-fixture'
+import { fixture, fixtureWithRound, id, NOW } from './test-fixture'
 import { validate } from './validate'
 
-const observation = {
-  id: 'observedPrinter',
+/** LAN 192.168.1.0/24, DHCP pool .100-.200, 機器1 at fixed .100 (no MAC recorded). */
+const base = () => fixtureWithRound()
+const seen = (oid: string, ip: string, mac: string | null, ports: number[] = [], extra = {}) => ({
+  id: oid,
   type: 'device',
   source: 'nmap',
   segment: id('sit', 1),
   observedAt: NOW,
-  value: { ip: '192.168.1.42', mac: '00:11:22:33:44:55', hostname: 'printer', ports: [] },
-}
+  value: {
+    ip,
+    mac,
+    hostname: null,
+    ports: ports.map((port) => ({ port, protocol: 'tcp', state: 'open' })),
+    ...extra,
+  },
+})
+const offer = (oid: string, server: string) => ({
+  id: oid,
+  type: 'dhcp',
+  source: 'tshark',
+  segment: id('sit', 1),
+  observedAt: NOW,
+  value: {
+    server,
+    ip: server,
+    message: '2',
+    offeredAddress: '192.168.1.150',
+    gateway: '192.168.1.1',
+    dns: ['192.168.1.2'],
+    relay: null,
+    mac: null,
+    leaseSeconds: 3600,
+  },
+})
+const observation = seen('observedPrinter', '192.168.1.42', '00:11:22:33:44:55', [9100])
 const result = {
   format: 'tylan-collection',
   schemaVersion: 1,
   runId: 'run1',
-  profile: {},
+  profile: { cidrs: ['192.168.1.0/24'], source: '192.168.1.99' },
   tools: {},
   startedAt: NOW,
   endedAt: NOW,
@@ -27,61 +53,212 @@ const result = {
   findings: [],
 }
 const options = {
-  documentId: id('doc', 1),
   siteId: id('sit', 1),
-  segmentId: id('seg', 1),
-  roundId: null,
-  selected: ['observedPrinter'],
-  mappings: {},
+  roundId: id('rnd', 1),
+  selected: ['host:00:11:22:33:44:55'],
   checkedBy: '調査者',
   now: NOW,
   packageHash: 'a'.repeat(64),
   storageLocation: '\\\\server\\evidence\\sealed',
 }
+const office = {
+  ...result,
+  observations: [
+    observation, // printer outside the pool → unregistered
+    seen('fixed', '192.168.1.100', 'aa:aa:aa:aa:aa:01'), // 機器1's fixed IP → known
+    seen('pc', '192.168.1.120', '00:15:5d:00:00:01', [135, 445], { vendor: 'Dell' }),
+    seen('pc2', '192.168.1.121', '00:15:5d:00:00:02', [135], { vendor: 'Dell' }),
+    seen('phone', '192.168.1.150', '9e:da:7f:dc:ee:9f'), // random MAC → client
+    seen('camera', '192.168.1.160', '00:40:8c:00:00:01', [554]), // in pool, RTSP → candidate
+    seen('self', '192.168.1.99', '00:00:00:00:00:99'), // the audit PC itself is never listed
+  ],
+}
+const classes = (rows: { ip: string; class: string }[]) => rows.map((r) => [r.ip, r.class])
 
-test('migration preserves original and round-trip rejects unknown future versions', () => {
-  const original = fixture()
-  const migrated = migrateV2(original, options.documentId)
-  expect(original.schemaVersion).toBe(1)
-  expect(migrated.schemaVersion).toBe(2)
-  expect(parseDocument(JSON.stringify(migrated)).documentId).toBe(options.documentId)
-  expect(() => parseDocument(JSON.stringify({ ...migrated, schemaVersion: 3 }))).toThrow()
+test('hosts sort into managed, unregistered, candidate and anonymous clients', () => {
+  const a = analyze(base(), office as never, id('sit', 1))
+  expect(classes(a.hosts)).toEqual([
+    ['192.168.1.42', 'unregistered'],
+    ['192.168.1.100', 'known'],
+    ['192.168.1.120', 'client'],
+    ['192.168.1.121', 'client'],
+    ['192.168.1.150', 'client'],
+    ['192.168.1.160', 'candidate'],
+  ])
+  expect(a.clients).toEqual([
+    {
+      cidr: '192.168.1.0/24',
+      total: 3,
+      randomMac: 1,
+      linkLocal: 0,
+      vendors: [
+        { name: 'Dell', count: 2 },
+        { name: 'ランダムMAC', count: 1 },
+      ],
+    },
+  ])
+  expect(a.unseen).toEqual([])
+  const quiet = analyze(base(), { ...office, observations: [] } as never, id('sit', 1))
+  expect(quiet.unseen.map((d) => d.id)).toEqual([id('dev', 1)])
+})
+
+test('without a recorded DHCP pool nothing is called a fixed address', () => {
+  const doc = base()
+  doc.dhcpScopes = []
+  const a = analyze(doc, office as never, id('sit', 1))
+  expect(a.poolsKnown).toBe(false)
+  expect(a.hosts.find((h) => h.ip === '192.168.1.42')?.class).toBe('candidate')
+})
+
+test('an unapproved DHCP server is rogue only once an approved one is recorded', () => {
+  const run = {
+    ...office,
+    observations: [seen('r', '192.168.1.5', '00:aa:00:00:00:05'), offer('o', '192.168.1.5')],
+  }
+  expect(analyze(base(), run as never, id('sit', 1)).hosts[0]).toMatchObject({
+    class: 'unregistered',
+    why: 'DHCP範囲外の固定IPなのに台帳にない（DHCP配布元）',
+  })
+  const doc = base()
+  doc.dhcpScopes[0]!.approval = 'approved'
+  doc.dhcpScopes[0]!.serverAddress = '192.168.1.1'
+  const a = analyze(doc, run as never, id('sit', 1))
+  expect(a.hosts[0]).toMatchObject({ class: 'rogue', why: '承認されていないDHCP配布元' })
+  expect(a.baseline.find((b) => b.field === 'dhcp')?.state).toBe('differs')
+})
+
+test('a fixed IP used by another MAC is flagged, not merged', () => {
+  const doc = base()
+  doc.ports[0]!.mac = 'aa:aa:aa:aa:aa:01'
+  const run = { ...office, observations: [seen('x', '192.168.1.100', 'bb:bb:bb:bb:bb:01')] }
+  const row = analyze(doc, run as never, id('sit', 1)).hosts[0]!
+  expect(row.class).toBe('unregistered')
+  expect(row.why).toMatch(/機器1/)
+})
+
+test('clients are stored as counts on the round and never become devices', async () => {
+  const plan = await planImport(base(), office, {
+    ...options,
+    selected: ['host:9e:da:7f:dc:ee:9f', 'host:00:15:5d:00:00:01'],
+  })
+  expect(plan.doc.devices).toHaveLength(2)
+  expect(plan.doc.auditRounds[0]!.clients).toEqual([
+    expect.objectContaining({ segmentId: id('seg', 1), runId: 'run1', total: 3, randomMac: 1 }),
+  ])
+  expect(validate(plan.doc).errors).toEqual([])
+  const again = await planImport(plan.doc, { ...office, runId: 'run2' }, options)
+  expect(again.doc.auditRounds[0]!.clients.map((c) => c.runId)).toEqual(['run1', 'run2'])
+})
+
+test('a managed device is found again by MAC after DHCP moves it', async () => {
+  const plan = await planImport(base(), office, {
+    ...options,
+    selected: ['host:00:40:8c:00:00:01', 'host:aa:aa:aa:aa:aa:01'],
+    kinds: { 'host:00:40:8c:00:00:01': 'camera' },
+  })
+  const camera = plan.doc.devices.at(-1)!
+  expect([camera.kind, camera.observation]).toEqual(['camera', 'observed'])
+  expect(plan.doc.ipAssignments.at(-1)?.mode).toBe('dhcp')
+  // the hand-registered device learned its MAC from its fixed IP
+  expect(plan.doc.ports[0]?.mac).toBe('aa:aa:aa:aa:aa:01')
+  const moved = {
+    ...office,
+    runId: 'run2',
+    observations: [seen('c', '192.168.1.177', '00:40:8c:00:00:01', [554])],
+  }
+  const row = analyze(plan.doc, moved as never, id('sit', 1)).hosts[0]!
+  expect([row.class, row.deviceId]).toEqual(['known', camera.id])
+})
+
+test('an unset baseline is adopted from what was observed and then compared', async () => {
+  const doc = base()
+  const run = { ...office, observations: [offer('o', '192.168.1.1')] }
+  const first = analyze(doc, run as never, id('sit', 1))
+  expect(first.baseline.map((b) => [b.field, b.state])).toEqual([
+    ['gateway', 'unset'],
+    ['dns', 'unset'],
+    ['dhcp', 'unset'],
+  ])
+  expect(baselineFor(doc, id('sit', 1))).toEqual({
+    approvedDhcp: null,
+    expectedDns: null,
+    expectedGateway: null,
+  })
+  const plan = await planImport(doc, run, {
+    ...options,
+    selected: first.baseline.map((b) => b.key),
+  })
+  expect(baselineFor(plan.doc, id('sit', 1))).toEqual({
+    approvedDhcp: ['192.168.1.1'],
+    expectedDns: ['192.168.1.2'],
+    expectedGateway: ['192.168.1.1'],
+  })
+  const next = analyze(plan.doc, run as never, id('sit', 1))
+  expect(next.baseline.map((b) => b.state)).toEqual(['match', 'match', 'match'])
+})
+
+test('imports need a round and verified evidence; unsafe results are refused', async () => {
+  await expect(planImport(fixture(), result, options)).rejects.toThrow(/回次/)
+  await expect(planImport(base(), result, { ...options, packageHash: '' })).rejects.toThrow()
+  await expect(planImport(base(), { ...result, injected: true }, options)).rejects.toThrow()
 })
 
 test('repeated and overlapping imports use stable identities without duplicating assets', async () => {
-  const first = await planImport(fixture(), result, options)
+  const first = await planImport(base(), office, options)
   expect(first.doc.devices).toHaveLength(3)
-  expect(validate(first.doc).errors).toEqual([])
-  for (let i = 0; i < 12; i++) {
-    const again = await planImport(first.doc, result, options)
-    expect(again.doc).toEqual(first.doc)
-  }
-  expect(first.doc.links).toEqual(fixture().links)
   expect(first.doc.devices.at(-1)?.approval).toBe('unknown')
+  expect(first.doc.ipAssignments.at(-1)?.mode).toBe('static')
+  for (let i = 0; i < 5; i++) {
+    expect((await planImport(first.doc, office, options)).doc).toEqual(first.doc)
+  }
+  const both = { ...options, selected: [...options.selected, 'host:00:40:8c:00:00:01'] }
+  const second = await planImport(first.doc, office, both)
+  expect(second.doc.devices).toHaveLength(4)
+  expect(second.doc.importBatches).toHaveLength(2)
+  expect((await planImport(second.doc, office, both)).doc).toEqual(second.doc)
 })
 
-test('IP-only candidate requires an explicit mapping; confirmed manual fields survive', async () => {
-  const sameIp = {
-    ...result,
-    observations: [{ ...observation, value: { ...observation.value, ip: '192.168.1.100' } }],
-  }
-  await expect(planImport(fixture(), sameIp, options)).rejects.toThrow(/照合/)
-  const plan = await planImport(fixture(), sameIp, {
-    ...options,
-    mappings: { observedPrinter: id('dev', 1) },
-  })
-  expect(plan.doc.devices).toHaveLength(2)
-  expect(plan.doc.devices[0]?.name).toBe('機器1')
+test('re-adopting after Undo keeps the reverted record and the same stable ids', async () => {
+  const first = await planImport(base(), result, options)
+  const undone = base()
+  undone.importBatches = first.doc.importBatches.map((b) => ({ ...b, state: 'reverted' as const }))
+  const again = await planImport(undone, result, options)
+  expect(again.importId).not.toBe(first.importId)
+  expect(again.doc.importBatches.map((b) => b.state)).toEqual(['reverted', 'applied'])
+  expect(again.doc.devices.at(-1)!.id).toBe(first.doc.devices.at(-1)!.id)
 })
 
-test('invalid evidence hash, cross-segment assignment and unsafe result are refused', async () => {
-  await expect(planImport(fixture(), result, { ...options, packageHash: '' })).rejects.toThrow()
-  const outside = {
+test('the same importId with another run, selection or package is refused', async () => {
+  const first = await planImport(base(), result, options)
+  const tampered = structuredClone(first.doc)
+  tampered.importBatches[0]!.selectionHash = 'f'.repeat(64)
+  await expect(planImport(tampered, result, options)).rejects.toThrow(/取り込みID/)
+})
+
+test('the public projection never carries import records or the document identity', async () => {
+  const plan = await planImport(base(), result, options)
+  const publicDoc = toPublic(plan.doc, { siteIds: [id('sit', 1)], fields: { evidence: true } }, NOW)
+  const text = JSON.stringify(publicDoc)
+  expect(text).not.toContain(plan.importId)
+  expect(text).not.toContain(plan.doc.documentId)
+  expect(text).not.toContain('a'.repeat(64))
+})
+
+test('a first audit of a site with no segments makes one from the scanned CIDR', async () => {
+  const empty = { ...base(), segments: [], ipAssignments: [], dhcpScopes: [] }
+  empty.ports = empty.ports.map((p) => ({ ...p, segmentIds: [] }))
+  const scan = {
     ...result,
-    observations: [{ ...observation, value: { ...observation.value, ip: '10.0.0.1' } }],
+    profile: { cidrs: ['192.168.4.0/24'] },
+    observations: [seen('a', '192.168.4.11', '00:11:22:33:44:55', [9100])],
   }
-  await expect(planImport(fixture(), outside, options)).rejects.toThrow()
-  await expect(planImport(fixture(), { ...result, injected: true }, options)).rejects.toThrow()
+  const plan = await planImport(empty, scan, options)
+  expect(plan.doc.segments.map((s) => [s.name, s.cidr, s.siteId])).toEqual([
+    ['192.168.4.0/24', '192.168.4.0/24', options.siteId],
+  ])
+  expect(plan.doc.ipAssignments.map((a) => a.segmentId)).toEqual([plan.doc.segments[0]!.id])
+  expect(validate(plan.doc).errors).toEqual([])
+  expect((await planImport(empty, scan, options)).doc).toEqual(plan.doc)
 })
 
 const managed = (id: string, type: string, value: Record<string, unknown>) => ({
@@ -122,13 +299,13 @@ const endpoints = (a: string, b: string) => ({
 
 test('switch candidates become links only through an explicit endpoint mapping', async () => {
   const noLinks = { ...options, selected: ['lldp1'] }
-  await expect(planImport(fixture(), switchRun, noLinks)).rejects.toThrow(/対応付け/)
-  const plan = await planImport(fixture(), switchRun, {
+  await expect(planImport(base(), switchRun, noLinks)).rejects.toThrow(/対応付け/)
+  const plan = await planImport(base(), switchRun, {
     ...options,
     selected: ['lldp1', 'mac1'],
     links: { lldp1: endpoints('', 'dev'), mac1: endpoints('', '') },
   })
-  const added = plan.doc.links.slice(fixture().links.length)
+  const added = plan.doc.links.slice(base().links.length)
   expect(added.map((l) => [l.kind, l.certainty])).toEqual([
     ['physical', 'estimated'],
     ['logical', 'estimated'],
@@ -150,7 +327,7 @@ test('a link mapping to a port of another device or to no known device is refuse
     b: { deviceId: id('dev', 2), portId: null },
   }
   await expect(
-    planImport(fixture(), switchRun, {
+    planImport(base(), switchRun, {
       ...options,
       selected: ['lldp1'],
       links: { lldp1: wrongPort },
@@ -158,47 +335,12 @@ test('a link mapping to a port of another device or to no known device is refuse
   ).rejects.toThrow()
   const nothingKnown = { a: { unknown: 'SW-1' }, b: { unknown: 'AP-1' } }
   await expect(
-    planImport(fixture(), switchRun, {
+    planImport(base(), switchRun, {
       ...options,
       selected: ['lldp1'],
       links: { lldp1: nothingKnown },
     }),
   ).rejects.toThrow()
-})
-
-const adRun = {
-  ...result,
-  runId: 'run3',
-  observations: [
-    managed('ad1', 'adComputer', {
-      name: 'PC-01',
-      objectGUID: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
-      dnsHostName: 'pc-01.example.internal',
-      operatingSystem: 'Windows 11',
-      enabled: true,
-    }),
-  ],
-}
-
-test('AD computers are adopted as new devices or bound to an existing one without edits', async () => {
-  await expect(planImport(fixture(), adRun, { ...options, selected: ['ad1'] })).rejects.toThrow(
-    /照合/,
-  )
-  const created = await planImport(fixture(), adRun, {
-    ...options,
-    selected: ['ad1'],
-    mappings: { ad1: 'new' },
-  })
-  const device = created.doc.devices.at(-1)!
-  expect(device.name).toBe('PC-01')
-  expect(device.notes).toMatch(/3f2504e0/)
-  const bound = await planImport(fixture(), adRun, {
-    ...options,
-    selected: ['ad1'],
-    mappings: { ad1: id('dev', 1) },
-  })
-  expect(bound.doc.devices).toEqual(migrateV2(fixture(), options.documentId).devices)
-  expect(bound.doc.importBatches?.at(-1)?.bindings[0]?.entityId).toBe(id('dev', 1))
 })
 
 const scopeRun = {
@@ -225,10 +367,10 @@ const scopeRun = {
 }
 
 test('a DHCP server scope fills an empty segment and never overwrites a recorded scope', async () => {
-  const kept = await planImport(fixture(), scopeRun, { ...options, selected: ['scope1'] })
-  expect(kept.doc.dhcpScopes).toEqual(fixture().dhcpScopes)
+  const kept = await planImport(base(), scopeRun, { ...options, selected: ['scope1'] })
+  expect(kept.doc.dhcpScopes).toEqual(base().dhcpScopes)
   expect(kept.conflicts.join()).toMatch(/DHCP/)
-  const empty = fixture()
+  const empty = base()
   empty.dhcpScopes = []
   const filled = await planImport(empty, scopeRun, { ...options, selected: ['scope1'] })
   const scope = filled.doc.dhcpScopes[0]!
@@ -240,161 +382,8 @@ test('a DHCP server scope fills an empty segment and never overwrites a recorded
   expect([scope.gateway, scope.dns, scope.approval]).toEqual([
     '192.168.1.1',
     ['192.168.1.2'],
-    'unknown',
+    'approved',
   ])
+  expect(scope.serverAddress).toBe('192.168.1.3')
   expect(scope.serverUnknown).toMatch(/192\.168\.1\.3/)
-})
-
-test('a managed Windows host keeps its static/DHCP assignment mode', async () => {
-  const windows = {
-    ...result,
-    observations: [{ ...observation, value: { ...observation.value, assignmentMode: 'static' } }],
-  }
-  const plan = await planImport(fixture(), windows, options)
-  expect(plan.doc.ipAssignments.at(-1)?.mode).toBe('static')
-})
-
-const camera = {
-  ...observation,
-  id: 'observedCamera',
-  value: { ...observation.value, ip: '192.168.1.43', mac: '00:11:22:33:44:77', hostname: 'cam' },
-}
-const two = { ...result, observations: [observation, camera] }
-
-test('overlapping partial imports and retries never duplicate an adopted observation', async () => {
-  const first = await planImport(fixture(), two, { ...options, selected: ['observedPrinter'] })
-  const second = await planImport(first.doc, two, {
-    ...options,
-    selected: ['observedPrinter', 'observedCamera'],
-  })
-  expect(second.doc.devices).toHaveLength(4)
-  expect(second.doc.importBatches).toHaveLength(2)
-  const printerKey = 'run1:observedPrinter:device'
-  expect(second.doc.importBatches![1]!.bindings.find((b) => b.key === printerKey)).toEqual(
-    first.doc.importBatches![0]!.bindings[0],
-  )
-  const retry = await planImport(second.doc, two, {
-    ...options,
-    selected: ['observedPrinter', 'observedCamera'],
-  })
-  expect(retry.doc).toEqual(second.doc)
-})
-
-test('re-adopting after Undo keeps the reverted record and the same stable ids', async () => {
-  const first = await planImport(fixture(), result, options)
-  const undone = migrateV2(fixture(), options.documentId)
-  undone.importBatches = first.doc.importBatches!.map((b) => ({ ...b, state: 'reverted' as const }))
-  const again = await planImport(undone, result, options)
-  expect(again.importId).not.toBe(first.importId)
-  expect(again.doc.importBatches!.map((b) => b.state)).toEqual(['reverted', 'applied'])
-  expect(again.doc.devices.at(-1)!.id).toBe(first.doc.devices.at(-1)!.id)
-  // A canonical file restored to an older version (no batch at all) also maps to the same ids.
-  const restored = await planImport(fixture(), result, options)
-  expect(restored.doc.devices.at(-1)!.id).toBe(first.doc.devices.at(-1)!.id)
-})
-
-test('the same importId with another run, selection or package is refused', async () => {
-  const first = await planImport(fixture(), result, options)
-  const tampered = structuredClone(first.doc)
-  tampered.importBatches![0]!.selectionHash = 'f'.repeat(64)
-  await expect(planImport(tampered, result, options)).rejects.toThrow(/取り込みID/)
-})
-
-test('the public projection never carries import records or the document identity', async () => {
-  const plan = await planImport(fixture(), result, options)
-  const publicDoc = toPublic(plan.doc, { siteIds: [id('sit', 1)], fields: { evidence: true } }, NOW)
-  const text = JSON.stringify(publicDoc)
-  expect(text).not.toContain(plan.importId)
-  expect(text).not.toContain(options.documentId)
-  expect(text).not.toContain('a'.repeat(64))
-})
-
-test('one PC seen in hundreds of ARP packets and both Nmap phases is one row', () => {
-  const at = (s: number) => `2026-11-10T15:50:${String(s).padStart(2, '0')}+09:00`
-  const obs = (id: string, type: string, source: string, s: number, value: object) => ({
-    id,
-    type,
-    source,
-    observedAt: at(s),
-    segment: 'sit',
-    value,
-  })
-  const pc = { ip: '192.168.8.47', mac: 'b0:7b:25:17:87:d2' }
-  const rows = groupDevices([
-    ...Array.from({ length: 300 }, (_, i) => obs(`a${i}`, 'arp', 'tshark', i % 60, pc)),
-    obs('n1', 'device', 'nmap', 10, { ...pc, ports: [], hostname: null }),
-    obs('n2', 'device', 'nmap', 20, {
-      ...pc,
-      ports: [
-        { port: 445, protocol: 'tcp', state: 'open' },
-        { port: 22, protocol: 'tcp', state: 'filtered' },
-      ],
-    }),
-    obs('x', 'arp', 'tshark', 5, { ip: '192.168.8.5', mac: '00:00:00:00:00:05' }),
-    obs('dns', 'dns', 'tshark', 5, { ip: '192.168.8.5' }),
-  ] as never)
-  expect(rows.map((r) => r.ip)).toEqual(['192.168.8.5', '192.168.8.47'])
-  const row = rows[1]!
-  expect(row.ids).toHaveLength(302)
-  expect(row.sources).toEqual(['tshark', 'nmap'])
-  expect([row.first, row.last]).toEqual([at(0), at(59)])
-  expect(row.openPorts).toEqual(['445/tcp'])
-})
-
-test('a first audit of a site with no segments makes one from the scanned CIDR', async () => {
-  const empty = { ...fixture(), segments: [], ipAssignments: [], dhcpScopes: [] }
-  empty.ports = empty.ports.map((p) => ({ ...p, segmentIds: [] }))
-  const scan = {
-    ...result,
-    profile: { cidrs: ['192.168.4.0/24'] },
-    observations: [
-      { ...observation, id: 'a', value: { ...observation.value, ip: '192.168.4.11' } },
-      { ...observation, id: 'b', value: { ...observation.value, ip: '192.168.4.21', mac: null } },
-    ],
-  }
-  const auto = { ...options, segmentId: '', selected: ['a', 'b'] }
-  const plan = await planImport(empty, scan, auto)
-  expect(plan.doc.segments.map((s) => [s.name, s.cidr, s.siteId])).toEqual([
-    ['192.168.4.0/24', '192.168.4.0/24', options.siteId],
-  ])
-  expect(plan.doc.ipAssignments.map((a) => a.segmentId)).toEqual([
-    plan.doc.segments[0]!.id,
-    plan.doc.segments[0]!.id,
-  ])
-  expect(validate(plan.doc).errors).toEqual([])
-  expect((await planImport(empty, scan, auto)).doc).toEqual(plan.doc)
-  const outside = { ...scan, profile: { cidrs: ['10.0.0.0/24'] } }
-  await expect(planImport(empty, outside, auto)).rejects.toThrow(/192\.168\.4\.11 のセグメント/)
-})
-
-test('maker and open ports name new devices; a random MAC is flagged as a phone', async () => {
-  const at = { ...observation, value: { ...observation.value } }
-  const scan = {
-    ...result,
-    observations: [
-      {
-        ...at,
-        id: 'printer',
-        value: {
-          ip: '192.168.1.42',
-          mac: '58:38:79:be:1f:65',
-          vendor: 'Ricoh Company',
-          ports: [{ protocol: 'tcp', port: 9100, state: 'open', reason: 'syn-ack' }],
-        },
-      },
-      { ...at, id: 'phone', type: 'arp', value: { ip: '192.168.1.43', mac: '9e:da:7f:dc:ee:9f' } },
-    ],
-  }
-  const rows = groupDevices(scan.observations as never)
-  expect(rows.map((r) => [r.guess, r.kind, r.vendor])).toEqual([
-    ['プリンター・複合機', 'printer', 'Ricoh Company'],
-    ['スマホ・タブレット等（ランダムMAC）', 'other', null],
-  ])
-  const plan = await planImport(fixture(), scan, { ...options, selected: ['printer', 'phone'] })
-  const added = plan.doc.devices.slice(-2).sort((a, b) => (a.name < b.name ? -1 : 1))
-  expect(added.map((d) => [d.name, d.kind, d.manufacturer])).toEqual([
-    ['Ricoh Company 192.168.1.42', 'printer', 'Ricoh Company'],
-    ['ランダムMAC 192.168.1.43', 'other', null],
-  ])
-  expect(added[0]!.notes).toMatch(/推定：プリンター・複合機.*9100\/tcp/)
 })
