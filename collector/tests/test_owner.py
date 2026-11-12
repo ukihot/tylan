@@ -31,13 +31,19 @@ def test_lease_is_never_revived_after_stop_or_expiry():
     assert foreign.expired(90)
 
 
-def send(ipc, secret, request_id, kind, payload):
+def test_a_released_lease_stops_the_owner_at_once():
+    lease = Lease("e", "s", 0)
+    lease.refresh({**FRESH, "released": True}, 10, 1000)
+    assert lease.expired(10)
+
+
+def send(ipc, secret, request_id, kind, payload, epoch="epoch1"):
     text = json.dumps(payload)
     now = int(time.time())
     request = {
         "protocolVersion": 1,
-        "ownerEpoch": "epoch1",
-        "sessionId": "epoch1",
+        "ownerEpoch": epoch,
+        "sessionId": epoch,
         "requestId": request_id,
         "idempotencyKey": request_id,
         "kind": kind,
@@ -100,3 +106,52 @@ def test_stop_owner_exits_even_while_powershell_keeps_renewing(tmp_path, monkeyp
     state = json.loads((tmp_path / "runs" / "run1" / "state.json").read_text(encoding="utf-8"))
     assert state["state"] == "cancelled"
     assert json.loads((ipc / "ready.json").read_text(encoding="utf-8"))["state"] == "stopped"
+
+
+def ready_state(ipc):
+    try:
+        return json.loads((ipc / "ready.json").read_text(encoding="utf-8"))["state"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def wait_for(check, seconds=5):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if check():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="named mutex owner is Windows-only")
+def test_a_new_owner_waits_for_the_previous_one_instead_of_refusing(tmp_path, monkeypatch):
+    """Reopening tylan.cmd while the last owner finishes must not end in 'another owner'."""
+    monkeypatch.setattr(job_owner, "Collector", SlowCollector)
+    secret = "ab" * 32
+
+    def config(epoch):
+        return {
+            "ipcRoot": str(tmp_path / epoch),
+            "runsRoot": str(tmp_path / "runs"),
+            "ownerEpoch": epoch,
+            "sessionId": epoch,
+            "secret": secret,
+            "evidenceRoot": str(tmp_path / "evidence"),
+        }
+
+    first = threading.Thread(target=run, args=(config("epoch1"),), daemon=True)
+    first.start()
+    assert wait_for(lambda: ready_state(tmp_path / "epoch1") == "ready")
+    second = threading.Thread(target=run, args=(config("epoch2"),), daemon=True)
+    second.start()
+    assert wait_for(lambda: ready_state(tmp_path / "epoch2") == "waiting")
+    # The first PowerShell closes normally: its owner leaves and the second takes over.
+    atomic_json(
+        tmp_path / "epoch1" / "lease.json",
+        {"ownerEpoch": "epoch1", "sessionId": "epoch1", "time": int(time.time()), "released": True},
+    )
+    assert wait_for(lambda: not first.is_alive())
+    assert wait_for(lambda: ready_state(tmp_path / "epoch2") == "ready")
+    send(tmp_path / "epoch2", secret, "stop2", "StopOwner", {}, epoch="epoch2")
+    assert wait_for(lambda: not second.is_alive())

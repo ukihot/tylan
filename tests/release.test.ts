@@ -14,12 +14,15 @@ import { fixture, id, NOW } from '../src/lib/test-fixture'
 let browser: Browser
 const browserVersions: Record<string, string> = {}
 const launchers: ChildProcess[] = []
+/** Stops each launcher's audit owner first, as audit-e2e does: a killed launcher cannot. */
+const stops: (() => Promise<unknown>)[] = []
 beforeAll(async () => {
   browser = await chromium.launch()
   browserVersions.chromium = browser.version()
 })
 afterAll(async () => {
   await browser?.close()
+  await Promise.all(stops.map((stop) => stop().catch(() => {})))
   for (const p of launchers) {
     p.kill()
   }
@@ -60,7 +63,11 @@ async function startLauncher(name: string, json?: string, script = 'launcher/tyl
     setTimeout(() => fail(new Error(`launcher did not start: ${out}`)), 20000)
   })
   const base = new URL(url).origin
-  return { root, url, base, token: new URL(url).searchParams.get('t')! }
+  const token = new URL(url).searchParams.get('t')!
+  stops.push(() =>
+    fetch(`${base}/api/audit/test-stop`, { method: 'POST', headers: { 'X-Tylan-Token': token } }),
+  )
+  return { root, url, base, token }
 }
 /** Records any request that leaves the machine (everything except the launcher itself). */
 async function watchedContext(b: Browser, allowed: string) {

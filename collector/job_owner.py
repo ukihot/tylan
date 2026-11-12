@@ -36,6 +36,10 @@ class Lease:
         if self.expired(now) or not isinstance(value, dict):
             return
         if value.get("ownerEpoch") == self.epoch and value.get("sessionId") == self.session:
+            if value.get("released"):
+                # PowerShell closed normally: take no new work, finish what runs, then leave.
+                self.stop()
+                return
             age = wall - value.get("time", 0)
             if abs(age) < self.seconds:
                 self.deadline = now + max(0, self.seconds - age)
@@ -146,11 +150,26 @@ def run(config):
     mutex = kernel.CreateMutexW(
         None, False, "Local\\TYLAN_AUDIT_" + digest(os.environ.get("USERNAME", ""))[:32]
     )
-    if not mutex or kernel.WaitForSingleObject(mutex, 0) not in (0, 0x80):
-        atomic_json(ipc / "ready.json", {"ownerEpoch": epoch, "state": "busy"})
-        if mutex:
+    if not mutex:
+        raise OSError(C.get_last_error(), "audit owner mutex unavailable")
+    lease = Lease(epoch, session, time.monotonic())
+    # A previous tylan.cmd's owner may still be finishing (its lease runs out within 90 s):
+    # wait for it while our own PowerShell is alive instead of refusing this whole session.
+    while kernel.WaitForSingleObject(mutex, 500) not in (0, 0x80):
+        try:
+            lease.refresh(
+                json.loads((ipc / "lease.json").read_text(encoding="utf-8")),
+                time.monotonic(),
+                time.time(),
+            )
+        except (OSError, ValueError):
+            pass
+        if lease.expired(time.monotonic()):
+            atomic_json(ipc / "ready.json", {"ownerEpoch": epoch, "state": "stopped"})
             kernel.CloseHandle(mutex)
-        return
+            return
+        if not (ipc / "ready.json").exists():
+            atomic_json(ipc / "ready.json", {"ownerEpoch": epoch, "state": "waiting"})
     for name in ("requests", "responses", "prepared", "intents", "tasks"):
         (ipc / name).mkdir(parents=True, exist_ok=True)
 
@@ -183,7 +202,6 @@ def run(config):
         ipc / "ready.json",
         {"ownerEpoch": epoch, "state": "ready", "pid": os.getpid(), "tools": tool_paths()},
     )
-    lease = Lease(epoch, session, time.monotonic())
     try:
         while True:
             manager.tick()

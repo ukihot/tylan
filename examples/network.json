@@ -1,6 +1,8 @@
 {
   "format": "tylan",
-  "schemaVersion": 1,
+  "schemaVersion": 3,
+  "documentId": "doc_0000000000000001",
+  "importBatches": [],
   "project": {
     "id": "prj_0000000000000001",
     "name": "架空の本社LAN · 操作確認用",
@@ -141,9 +143,9 @@
     },
     {
       "id": "dev_0000000000000006",
-      "name": "業務PC",
+      "name": "勤怠端末",
       "assetNumber": null,
-      "kind": "pc",
+      "kind": "attendance",
       "manufacturer": null,
       "model": null,
       "serial": null,
@@ -712,6 +714,7 @@
       "segmentId": "seg_0000000000000001",
       "serverDeviceId": "dev_0000000000000001",
       "serverUnknown": null,
+      "serverAddress": "192.168.10.1",
       "ranges": [
         {
           "start": "192.168.10.100",
@@ -896,7 +899,8 @@
       "siteIds": ["sit_0000000000000001"],
       "startDate": "2026-11-05",
       "endDate": null,
-      "surveyor": null
+      "surveyor": null,
+      "clients": []
     }
   ],
   "auditResults": [

@@ -112,6 +112,13 @@ function Update-AuditLease {
     } catch { }
   }
 }
+# On a normal exit the owner stops taking work and leaves once its running audit ends,
+# so the next tylan.cmd does not wait out the 90-second lease.
+function Release-AuditOwner {
+  if ($script:auditStarted) {
+    try { Local-Json (Join-Path $auditIpc 'lease.json') @{ ownerEpoch = $auditEpoch; sessionId = $auditEpoch; time = (Epoch-Time); released = $true } } catch { }
+  }
+}
 function Send-AuditRequest([string]$kind, $payload, [string]$key = '') {
   Start-AuditOwner
   $id = [guid]::NewGuid().ToString('N')
@@ -131,8 +138,8 @@ function Audit-Response([string]$id) {
   $response = Read-Local (Join-Path $auditIpc "responses\$id.json")
   if ($response) { return $response }
   $ready = Read-Local (Join-Path $auditIpc 'ready.json')
-  if ($ready -and $ready.state -in @('busy', 'failed', 'stopped')) {
-    $reasons = @{ busy = 'another owner is active'; failed = 'collector owner failed'; stopped = 'collector owner stopped; restart tylan.cmd to audit again (editing still works)' }
+  if ($ready -and $ready.state -in @('failed', 'stopped')) {
+    $reasons = @{ failed = 'collector owner failed'; stopped = 'collector owner stopped; restart tylan.cmd to audit again (editing still works)' }
     return @{ accepted = $false; error = (Prop $ready 'error' $reasons[$ready.state]); ownerState = $ready.state }
   }
   return @{ accepted = $null; state = 'pendingAcceptance'; requestId = $id }

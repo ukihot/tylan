@@ -312,5 +312,6 @@ try {
     try { Serve $client } catch { [Console]::Out.WriteLine("tylan: $($_.Exception.Message)") } finally { $client.Close() }
   }
 } finally {
+  Release-AuditOwner
   $listener.Stop()
 }

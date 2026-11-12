@@ -14,7 +14,16 @@ export function sampleDoc() {
     siteId: id('sit', 1),
     name: '1F サーバーラック',
   })
-  const kinds = ['serviceAdapter', 'switch', 'switch', 'ap', 'ap', 'pc', 'printer', 'nas'] as const
+  const kinds = [
+    'serviceAdapter',
+    'switch',
+    'switch',
+    'ap',
+    'ap',
+    'attendance',
+    'printer',
+    'nas',
+  ] as const
   kinds.forEach((kind, i) => {
     doc.devices.push({
       ...newEntity('devices', id('dev', i + 1)),
@@ -24,7 +33,7 @@ export function sampleDoc() {
         'フロアスイッチ',
         '業務AP',
         'ゲストAP',
-        '業務PC',
+        '勤怠端末',
         '共用プリンタ',
         'NAS',
       ][i]!,
@@ -101,6 +110,7 @@ export function sampleDoc() {
     segmentId: id('seg', 1),
     serverDeviceId: id('dev', 1),
     serverUnknown: null,
+    serverAddress: '192.168.10.1',
     ranges: [{ start: '192.168.10.100', end: '192.168.10.200' }],
     lease: { value: 24, unit: 'hours' },
     approval: 'approved',
