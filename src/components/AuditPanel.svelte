@@ -159,7 +159,12 @@
     }
     return `IPv6設定未確認：${status.reason ?? '取得失敗'}（IPv6経路なしとは判断しません）`
   })
-  const selectedKeys = $derived(Object.keys(selected).filter((key) => selected[key]))
+  // Findings need an audit round; without one they would abort the whole import.
+  const selectedKeys = $derived(
+    Object.keys(selected).filter(
+      (key) => selected[key] && (profile.roundId || !result?.findings.some((f) => f.id === key)),
+    ),
+  )
   const addressChoices = $derived(
     inventory?.addresses.filter(
       (a) =>
@@ -1179,9 +1184,14 @@
           {/each}
         {/if}
         <h3>異常候補・追加確認</h3>
+        {#if !profile.roundId}
+          <p class="muted">
+            監査回次が「機器収集のみ」のため、異常候補は採用できません（参照のみ）。
+          </p>
+        {/if}
         {#each result.findings as finding}
           <label class="audit-finding">
-            <input type="checkbox" bind:checked={selected[finding.id]}>
+            <input type="checkbox" disabled={!profile.roundId} bind:checked={selected[finding.id]}>
             No.{finding.itemNo} /{finding.status}
             ：{finding.reason}
             <small>次の確認：{finding.nextCheck}</small>
