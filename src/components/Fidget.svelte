@@ -1,6 +1,12 @@
 <script lang="ts">
+  import { flip } from 'svelte/animate'
+  import { fade, fly } from 'svelte/transition'
   import { fidget } from '../lib/fidget.svelte'
 
+  /** Newest at the bottom; older lines are pushed up and off past this many. */
+  const MAX_LINES = 4
+  const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const motion = still ? 0 : 200
   const frames = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
   let frame = $state(0)
   const busy = $derived(fidget.lines.some((l) => !l.done))
@@ -14,8 +20,13 @@
 </script>
 
 <div class="fidget" role="status" aria-live="polite">
-  {#each fidget.lines as line (line.key)}
-    <p class:done={line.done}>
+  {#each fidget.lines.slice(-MAX_LINES) as line (line.key)}
+    <p
+      class:done={line.done}
+      animate:flip={{ duration: motion }}
+      in:fly={{ y: 12, duration: motion }}
+      out:fade={{ duration: motion }}
+    >
       <span>{line.text}</span>
       {#if line.detail}
         <span class="detail">{line.detail}</span>
